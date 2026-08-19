@@ -1,507 +1,843 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+ИНТЕРАКТИВНЫЙ ИНСПЕКТОР МОНОЛИТНОГО HTML
+========================================
+Данный скрипт загружает монолитный HTML-файл, разбивает его на блоки 
+(по заданному вами CSS-селектору или структуре) и предоставляет веб-интерфейс 
+для наглядного просмотра верстки на весь экран с возможностью клика по любому 
+элементу для просмотра его исходного кода, копирования и отправки в ИИ.
+"""
+
 import os
 import sys
 import json
 from flask import Flask, render_template_string, request, jsonify
 from bs4 import BeautifulSoup
 
-# ==========================================
-# 1. КОНФИГУРАЦИЯ И ЗАГРУЗКА ФАЙЛА
-# ==========================================
-# По умолчанию скрипт ищет файл 'upload.html' в папке со скриптом.
-# Вы можете указать путь к файлу при запуске: python inspector.py путь/к/вашему.html
+# =====================================================================
+# 1. НАСТРОЙКИ И АРГУМЕНТЫ КОМАНДНОЙ СТРОКИ
+# =====================================================================
+
+# По умолчанию скрипт ищет файл 'upload.html' в текущей папке.
+# Вы можете передать путь к файлу как аргумент при запуске:
+# python inspector_full.py full_page.html
 INPUT_HTML_FILE = "upload.html"
+
 if len(sys.argv) > 1:
     INPUT_HTML_FILE = sys.argv[1]
+    print(f"[INFO] Загружаем файл, переданный в аргументе: {INPUT_HTML_FILE}")
 
-# ==========================================
-# 2. ФУНКЦИЯ ПАРСИНГА (ЗАМЕНИТЕ НА ВАШУ)
-# ==========================================
-def extract_and_wrap_blocks(html_content):
+# ВАЖНО! Замените этот селектор на тот, которым ваше оригинальное приложение 
+# отделяет один блок от другого внутри монолитного HTML.
+# Например: 'div.block-item', '.component-wrapper', 'section[data-id]' и т.д.
+BLOCK_CSS_SELECTOR = 'div.block-desc, div.component-wrapper, section[data-id]'
+
+
+# =====================================================================
+# 2. ИНИЦИАЛИЗАЦИЯ ВЕБ-СЕРВЕРА FLASK
+# =====================================================================
+
+app = Flask(__name__)
+
+
+# =====================================================================
+# 3. ФУНКЦИЯ ПАРСИНГА И РАЗБИЕНИЯ HTML НА БЛОКИ
+# =====================================================================
+
+def parse_and_wrap_html_blocks(raw_html_content):
     """
-    Эта функция принимает ваш монолитный HTML.
-    Она должна найти каждый блок и обернуть его в div с data-block-id.
+    Принимает на вход строку с монолитным HTML.
+    Находит блоки по заданному CSS-селектору, оборачивает каждый блок в 
+    интерактивный DIV с уникальным ID, собирает данные о каждом блоке в JSON
+    и возвращает модифицированный HTML вместе с массивом данных блоков.
     """
-    soup = BeautifulSoup(html_content, 'html.parser')
+    
+    # Создаем объект BeautifulSoup для удобного DOM-парсинга
+    soup = BeautifulSoup(raw_html_content, 'html.parser')
+    
+    # Ищем корневой контейнер. Если есть обертка, парсим внутри нее.
+    # Если нет, парсим весь тег body.
+    root_container = soup.body
+    if not root_container:
+        root_container = soup.find('main')
+    if not root_container:
+        root_container = soup.find('div', class_='app-container')
+    
+    # Для надежности, если ничего не нашли, берем весь документ
+    if not root_container:
+        root_container = soup
+    
+    # Ищем все элементы, которые являются отдельными блоками, 
+    # используя указанный пользователем CSS_селектор
+    block_elements = root_container.select(BLOCK_CSS_SELECTOR)
+    
+    # Если по селектору ничего не найдено (например, вы его не указали),
+    # в качестве запасного варианта берём все прямые дочерние элементы body
+    if not block_elements:
+        print("[WARNING] Селектор не нашел блоков. Берем все прямые дочерние элементы.")
+        block_elements = [child for child in root_container.find_all(recursive=False) if child.name]
+    
+    # Инициализируем список для хранения данных о блоках
     blocks_data = []
     
-    # ==========================================
-    # ВАЖНО: Вставьте сюда ваш алгоритм разбиения на блоки.
-    # На скриншоте у вас есть блоки с классами block-desc и block-meta.
-    # Я написал пример поиска всех прямых дочерних элементов внутри body.
-    # Если ваши блоки заканчиваются тегами, используйте свой парсер.
-    # ==========================================
-    
-    # Ищем корневой контейнер. Чаще всего это body.
-    container = soup.body
-    if not container:
-        container = soup.find('div', class_='main-container') # Если есть обертка
-    
-    # ПРИМЕР: Поиск всех блоков с вашим классом (замените на ваш реальный селектор!)
-    # Если ваши блоки это <div class="block-desc">, ищите по нему:
-    block_elements = container.find_all('div', class_='block-desc', recursive=False)
-    
-    # Если не нашли по классу (для теста скрипта), берем все прямые дочерние элементы body
-    if not block_elements:
-        block_elements = [child for child in container.find_all(recursive=False) if child.name]
-
-    # ==========================================
-    # Оборачиваем найденные элементы в интерактивные блоки
-    # ==========================================
+    # Проходим по каждому найденному элементу
     for index, element in enumerate(block_elements):
+        
+        # Генерируем уникальный ID для этого блока (начиная с 1)
         block_id = index + 1
         
-        # Сохраняем оригинальный HTML этого конкретного блока
-        raw_html = str(element)
+        # Сохраняем оригинальный сырой HTML-код этого блока
+        block_raw_html = str(element)
         
-        # Создаем обертку с уникальным ID
-        wrapper = soup.new_tag('div')
-        wrapper['class'] = 'block-wrapper'
-        wrapper['data-block-id'] = str(block_id)
-        # Для облегчения отладки можно записать имя:
-        wrapper['data-block-name'] = f'Блок #{block_id}'
+        # Создаем новую HTML-обертку (DIV), которая будет реагировать на клики
+        wrapper_tag = soup.new_tag('div')
         
-        # Оборачиваем элемент в нашу обертку (DOM манипуляция)
-        element.wrap(wrapper)
+        # Присваиваем обертке CSS-класс, который ловит наведение мыши
+        wrapper_tag['class'] = 'clickable-block-wrapper'
         
-        # Добавляем данные в список для передачи в JavaScript
+        # Навешиваем data-атрибут с ID блока для быстрой идентификации в JS
+        wrapper_tag['data-block-id'] = str(block_id)
+        
+        # Навешиваем data-атрибут с именем блока для отображения в модалке
+        wrapper_tag['data-block-name'] = f'Интерактивный блок #{block_id}'
+        
+        # Оборачиваем найденный DOM-элемент в созданную нами обертку.
+        # Это ключевой момент: теперь в DOM структуре элемент лежит внутри обертки.
+        element.wrap(wrapper_tag)
+        
+        # Записываем данные о блоке в общий массив для передачи в JavaScript
         blocks_data.append({
             'id': block_id,
-            'html': raw_html,
-            'name': f'Блок #{block_id}'
+            'html': block_raw_html,
+            'name': f'Компонент #{block_id}'
         })
-
-    # Возвращаем модифицированный HTML и JSON с данными
+    
+    print(f"[INFO] Успешно обнаружено и обернуто {len(blocks_data)} блоков.")
+    
+    # Возвращаем измененный HTML (с обертками) и JSON-данные о блоках
     return str(soup), blocks_data
 
-# ==========================================
-# 3. ШАБЛОН HTML (С CSS И JS ИНТЕРАКТИВНОСТЬЮ)
-# ==========================================
-HTML_TEMPLATE = """
+
+# =====================================================================
+# 4. ГЛАВНЫЙ HTML-ШАБЛОН ИНТЕРФЕЙСА (С ПОЛНЫМ CSS И JS)
+# =====================================================================
+
+# Обратите внимание: в этом шаблоне используется старый способ подстановки через .replace(),
+# чтобы гарантировать совместимость с любой версией Python и Flask, 
+# без привязки к конкретному шаблонизатору Jinja2, кроме как рендеринг строки.
+FULL_HTML_INTERFACE_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Инспектор HTML блоков</title>
+    <title>Полноэкранный инспектор кода HTML блоков</title>
+    
+    <!-- 
+    ====================================================================
+    CSS СТИЛИ. Оформление, анимации, модальные окна и интерактивность.
+    ====================================================================
+    -->
     <style>
-        /* Сброс базовых отступов браузера */
-        * { margin: 0; padding: 0; box-sizing: border-box; }
         
-        /* Настройка главного окна на весь экран */
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            background: #f8f9fa;
-            height: 100vh;
-            overflow: hidden;
+        /* 1. ГЛОБАЛЬНЫЙ СБРОС СТИЛЕЙ */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
         }
         
-        #preview-container {
+        /* 2. СТИЛИЗАЦИЯ ТЕЛА СТРАНИЦЫ И ПРОКРУТКИ */
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: #f0f2f5;
+            height: 100vh;
+            width: 100vw;
+            overflow: hidden; /* Убираем двойную прокрутку */
+        }
+        
+        /* 3. КОНТЕЙНЕР ПРЕДПРОСМОТРА (ЗАНИМАЕТ ВЕСЬ ЭКРАН) */
+        #fullscreen-preview-container {
             width: 100%;
             height: 100vh;
-            overflow-y: auto; /* Прокрутка страницы внутри */
-            padding: 30px;
-            background: #ffffff;
+            overflow-y: auto; /* Включаем прокрутку внутри самого контейнера */
+            padding: 20px;
+            background-color: #ffffff;
             position: relative;
-        }
-
-        /* Стиль обертки: при наведении - синяя рамка */
-        .block-wrapper {
-            display: block;         /* Чтобы рамка охватывала весь блок */
-            position: relative;
-            cursor: pointer;
-            transition: outline 0.15s ease-in-out, background-color 0.15s ease-in-out;
-            border-radius: 3px;
-        }
-
-        .block-wrapper:hover {
-            outline: 3px solid #3b82f6; /* Синяя рамка как в DevTools */
-            outline-offset: -3px;
-            background-color: rgba(59, 130, 246, 0.05); /* Легкий синий фон при наведении */
-            z-index: 10;
         }
         
-        /* Стили модального окна с кодом */
-        .modal-overlay {
+        /* 4. СТИЛИ ОБЕРТКИ БЛОКА (ПОДСВЕТКА ПРИ НАВЕДЕНИИ) */
+        .clickable-block-wrapper {
+            display: block;             /* Гарантируем блочное поведение */
+            position: relative;         /* Для возможной абсолютной обводки внутри */
+            cursor: pointer;            /* Указываем, что элемент кликабельный */
+            outline: 2px solid transparent; /* Резервируем место под рамку, чтобы избежать скачков */
+            outline-offset: -2px;
+            transition: all 0.2s ease-in-out;
+            border-radius: 4px;
+            margin-bottom: 2px;         /* Небольшой отступ между блоками для удобства наведения */
+        }
+        
+        /* 5. СТИЛИ ПРИ НАВЕДЕНИИ НА БЛОК */
+        .clickable-block-wrapper:hover {
+            outline: 3px solid #3b82f6;  /* Синяя рамка, как в Chrome DevTools */
+            outline-offset: -3px;
+            background-color: rgba(59, 130, 246, 0.03); /* Легкий полупрозрачный синий фон */
+            z-index: 10;                 /* Поднимаем над соседними элементами */
+        }
+        
+        /* 6. ОВЕРЛЕЙ МОДАЛЬНОГО ОКНА (ЗАТЕМНЕНИЕ ФОНА) */
+        #code-inspector-overlay {
             display: none;
             position: fixed;
-            top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(0, 0, 0, 0.6);
-            backdrop-filter: blur(4px);
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: rgba(0, 0, 0, 0.65); /* Темный фон с прозрачностью */
+            backdrop-filter: blur(6px);          /* Размытие фона за модалкой */
             z-index: 9999;
+            display: flex;
             justify-content: center;
             align-items: center;
+            opacity: 0;
+            transition: opacity 0.3s ease;
         }
         
-        .modal-overlay.active {
+        /* 7. АКТИВНОЕ СОСТОЯНИЕ МОДАЛЬНОГО ОКНА */
+        #code-inspector-overlay.active {
             display: flex;
+            opacity: 1;
         }
-
-        .modal-box {
-            background: #ffffff;
-            border-radius: 16px;
+        
+        /* 8. ЦЕНТРАЛЬНОЕ ОКНО С КОДОМ */
+        .modal-content-box {
+            background-color: #ffffff;
+            border-radius: 20px;
             width: 90%;
-            max-width: 900px;
+            max-width: 1024px;
             max-height: 90vh;
             display: flex;
             flex-direction: column;
-            box-shadow: 0 25px 50px -12px rgba(0,0,0,0.25);
-            overflow: hidden;
-            animation: modalSlide 0.2s ease-out;
+            box-shadow: 0 30px 60px rgba(0, 0, 0, 0.3);
+            transform: translateY(20px) scale(0.95);
+            transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
         }
-
-        @keyframes modalSlide {
-            from { opacity: 0; transform: translateY(-20px) scale(0.95); }
-            to { opacity: 1; transform: translateY(0) scale(1); }
+        
+        /* При активации включаем анимацию выплывания */
+        #code-inspector-overlay.active .modal-content-box {
+            transform: translateY(0) scale(1);
         }
-
-        /* Шапка модалки */
-        .modal-header {
-            padding: 20px 24px;
+        
+        /* 9. ЗАГОЛОВОК МОДАЛЬНОГО ОКНА */
+        .modal-header-section {
+            padding: 20px 28px;
             border-bottom: 1px solid #e5e7eb;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            background: #f9fafb;
+            background-color: #f9fafb;
+            border-radius: 20px 20px 0 0;
         }
-
-        .modal-header h2 {
-            font-size: 20px;
-            font-weight: 600;
+        
+        .modal-header-section h2 {
+            font-size: 22px;
+            font-weight: 700;
             color: #111827;
             margin: 0;
         }
-
-        .modal-close {
-            background: none;
+        
+        /* 10. КНОПКА ЗАКРЫТИЯ МОДАЛКИ */
+        .modal-close-button {
+            background: transparent;
             border: none;
-            font-size: 28px;
+            font-size: 32px;
+            line-height: 1;
             cursor: pointer;
             color: #6b7280;
             padding: 4px 12px;
-            border-radius: 6px;
-            transition: background 0.2s;
+            border-radius: 8px;
+            transition: background-color 0.2s, color 0.2s;
         }
-
-        .modal-close:hover {
-            background: #e5e7eb;
+        
+        .modal-close-button:hover {
+            background-color: #e5e7eb;
             color: #111827;
         }
-
-        /* Тело модалки (Код) */
-        .modal-body {
-            padding: 20px 24px;
+        
+        /* 11. ТЕЛО МОДАЛЬНОГО ОКНА (БЛОК ОТОБРАЖЕНИЯ КОДА) */
+        .modal-code-body-section {
+            padding: 24px 28px;
             overflow-y: auto;
             flex: 1;
-            background: #f8fafc;
+            background-color: #f8fafc;
         }
-
-        .modal-body pre {
-            background: #1e293b;
+        
+        .modal-code-body-section pre {
+            background-color: #1e293b; /* Темная тема для кода */
             color: #e2e8f0;
-            padding: 20px;
-            border-radius: 8px;
+            padding: 24px;
+            border-radius: 12px;
             overflow-x: auto;
+            font-family: 'Consolas', 'Monaco', 'Bitstream Vera Sans Mono', monospace;
             font-size: 14px;
-            line-height: 1.6;
-            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            line-height: 1.8;
             margin: 0;
             white-space: pre-wrap;
             word-break: break-all;
-            box-shadow: inset 0 2px 4px rgba(0,0,0,0.1);
+            box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.2);
+            border: 1px solid #334155;
         }
-
-        /* Подвал модалки (Кнопки) */
-        .modal-footer {
-            padding: 16px 24px 24px 24px;
+        
+        /* 12. ПОДВАЛ МОДАЛЬНОГО ОКНА (КНОПКИ ДЕЙСТВИЙ) */
+        .modal-actions-footer {
+            padding: 16px 28px 24px 28px;
             border-top: 1px solid #e5e7eb;
             display: flex;
-            gap: 12px;
             flex-wrap: wrap;
-            background: #f9fafb;
+            gap: 12px;
+            background-color: #f9fafb;
+            border-radius: 0 0 20px 20px;
         }
-
-        .modal-btn {
-            padding: 10px 20px;
+        
+        /* 13. СТИЛИ КНОПОК ДЕЙСТВИЙ */
+        .action-button {
+            padding: 10px 22px;
             border: none;
-            border-radius: 8px;
+            border-radius: 10px;
             font-weight: 600;
+            font-size: 14px;
+            letter-spacing: 0.3px;
             cursor: pointer;
             transition: all 0.2s ease;
             display: flex;
             align-items: center;
             gap: 8px;
-            font-size: 14px;
-            letter-spacing: 0.3px;
         }
-
-        /* Кнопка Улучшить - красная (как на скрине) */
-        .modal-btn.improve {
-            background: #ef4444;
+        
+        /* Кнопка улучшения через ИИ (красная, как в оригинале) */
+        .action-button.btn-improve-ai {
+            background-color: #ef4444;
             color: white;
         }
-        .modal-btn.improve:hover { background: #dc2626; transform: translateY(-1px); }
-
-        /* Кнопка ChatGPT - зеленая */
-        .modal-btn.chatgpt {
-            background: #10a37f;
+        .action-button.btn-improve-ai:hover {
+            background-color: #dc2626;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+        }
+        
+        /* Кнопка отправки в ChatGPT (зеленая, OpenAI стиль) */
+        .action-button.btn-chatgpt {
+            background-color: #10a37f;
             color: white;
         }
-        .modal-btn.chatgpt:hover { background: #0e8b6b; transform: translateY(-1px); }
-
-        /* Кнопка Копировать - серая */
-        .modal-btn.copy {
-            background: #e5e7eb;
+        .action-button.btn-chatgpt:hover {
+            background-color: #0e8b6b;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(16, 163, 127, 0.3);
+        }
+        
+        /* Кнопка копирования кода (серая) */
+        .action-button.btn-copy-code {
+            background-color: #e5e7eb;
             color: #374151;
         }
-        .modal-btn.copy:hover { background: #d1d5db; }
-
-        /* Кнопка Закрыть - прозрачная */
-        .modal-btn.cancel {
+        .action-button.btn-copy-code:hover {
+            background-color: #d1d5db;
+            transform: translateY(-2px);
+        }
+        
+        /* Кнопка закрытия (прозрачная, справа) */
+        .action-button.btn-close-modal {
             margin-left: auto;
-            background: transparent;
+            background-color: transparent;
             color: #6b7280;
         }
-        .modal-btn.cancel:hover { background: #f3f4f6; }
+        .action-button.btn-close-modal:hover {
+            background-color: #f3f4f6;
+            color: #111827;
+        }
         
-        /* Тост-уведомления */
-        .toast {
+        /* 14. TOAST-УВЕДОМЛЕНИЯ (ВСПЛЫВАЮЩИЕ ПОДСКАЗКИ) */
+        .floating-toast-message {
             position: fixed;
-            bottom: 30px;
+            bottom: 40px;
             left: 50%;
             transform: translateX(-50%);
-            background: #1f2937;
-            color: white;
-            padding: 14px 28px;
-            border-radius: 10px;
+            background-color: #1f2937;
+            color: #f9fafb;
+            padding: 16px 32px;
+            border-radius: 12px;
             font-size: 15px;
-            box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1);
+            font-weight: 500;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
             opacity: 0;
-            transition: opacity 0.3s ease;
+            visibility: hidden;
+            transition: opacity 0.3s ease, visibility 0.3s ease;
             z-index: 99999;
             pointer-events: none;
+            border: 1px solid #374151;
         }
-        .toast.show { opacity: 1; }
+        
+        .floating-toast-message.visible {
+            opacity: 1;
+            visibility: visible;
+        }
+        
     </style>
 </head>
 <body>
-    <!-- 1. ОБЛАСТЬ ПРЕДПРОСМОТРА -->
-    <div id="preview-container">
+
+    <!-- 
+    ====================================================================
+    Основной контейнер для предпросмотра всей страницы
+    ====================================================================
+    -->
+    <div id="fullscreen-preview-container">
+        <!-- Сюда мы через Python вставим весь обернутый HTML -->
         {{ GENERATED_HTML | safe }}
     </div>
 
-    <!-- 2. МОДАЛЬНОЕ ОКНО -->
-    <div id="modal-overlay" class="modal-overlay">
-        <div class="modal-box">
-            <div class="modal-header">
-                <h2 id="modal-title">Информация о блоке</h2>
-                <button id="modal-close" class="modal-close">&times;</button>
+    <!-- 
+    ====================================================================
+    Модальное окно для отображения кода выбранного блока
+    ====================================================================
+    -->
+    <div id="code-inspector-overlay" class="code-inspector-overlay">
+        <div class="modal-content-box">
+            
+            <!-- Заголовок модалки -->
+            <div class="modal-header-section">
+                <h2 id="modal-block-title">Информация о компоненте</h2>
+                <button id="modal-close-btn" class="modal-close-button">&times;</button>
             </div>
-            <div class="modal-body">
-                <pre id="modal-code"></pre>
+            
+            <!-- Тело модалки с кодом -->
+            <div class="modal-code-body-section">
+                <pre id="modal-block-code-viewer"></pre>
             </div>
-            <div class="modal-footer">
-                <button id="btn-improve" class="modal-btn improve">🤖 Улучшить через ИИ</button>
-                <button id="btn-chatgpt" class="modal-btn chatgpt">📤 Отправить в ChatGPT</button>
-                <button id="btn-copy" class="modal-btn copy">📋 Копировать</button>
-                <button id="modal-close-btn2" class="modal-btn cancel">Закрыть</button>
+            
+            <!-- Подвал модалки с кнопками -->
+            <div class="modal-actions-footer">
+                <button id="action-improve-ai" class="action-button btn-improve-ai">🤖 Улучшить через ИИ</button>
+                <button id="action-chatgpt" class="action-button btn-chatgpt">📤 Отправить в ChatGPT</button>
+                <button id="action-copy-clipboard" class="action-button btn-copy-code">📋 Копировать код</button>
+                <button id="modal-close-btn-2" class="action-button btn-close-modal">Закрыть</button>
             </div>
         </div>
     </div>
 
-    <!-- 3. TOAST УВЕДОМЛЕНИЕ -->
-    <div id="toast" class="toast">Готово!</div>
+    <!-- 
+    ====================================================================
+    Компонент всплывающего уведомления
+    ====================================================================
+    -->
+    <div id="system-toast-message" class="floating-toast-message">Готово!</div>
 
-    <!-- 4. JAVASCRIPT (ОБРАБОТЧИКИ) -->
+    <!-- 
+    ====================================================================
+    JavaScript: Обработка кликов, модального окна и взаимодействий
+    ====================================================================
+    -->
     <script>
-        // Получаем данные блоков из Python (передано как JSON)
+        
+        // =============================================================
+        // 1. ПРИНИМАЕМ ДАННЫЕ О БЛОКАХ ОТ PYTHON-СЕРВЕРА
+        // =============================================================
+        // Переменная blocksData будет автоматически заменена на JSON-строку
+        // в момент рендеринга страницы сервером Flask.
         const blocksData = {{ BLOCKS_JSON | safe }};
-        let currentBlockId = null;
+        
+        // Переменная для хранения ID блока, который сейчас открыт в модалке
+        let currentOpenBlockId = null;
 
-        const previewContainer = document.getElementById('preview-container');
-        const modalOverlay = document.getElementById('modal-overlay');
-        const modalTitle = document.getElementById('modal-title');
-        const modalCode = document.getElementById('modal-code');
-        const toast = document.getElementById('toast');
+        // Получаем ссылки на DOM-элементы для дальнейшей работы с ними
+        const previewContainer = document.getElementById('fullscreen-preview-container');
+        const modalOverlay = document.getElementById('code-inspector-overlay');
+        const modalTitleElement = document.getElementById('modal-block-title');
+        const modalCodeViewer = document.getElementById('modal-block-code-viewer');
+        const toastMessage = document.getElementById('system-toast-message');
 
-        // 1. ДЕЛЕГИРОВАНИЕ СОБЫТИЯ КЛИКА НА ВСЕЙ СТРАНИЦЕ
-        previewContainer.addEventListener('click', function(e) {
-            // Находим ближайший родительский элемент с классом .block-wrapper
-            const blockWrapper = e.target.closest('.block-wrapper');
-            if (blockWrapper) {
-                const blockId = parseInt(blockWrapper.getAttribute('data-block-id'));
-                const block = blocksData.find(b => b.id === blockId);
-                if (block) {
-                    openBlockModal(block);
+        // =============================================================
+        // 2. ДЕЛЕГИРОВАНИЕ СОБЫТИЯ КЛИКА ПО ВСЕЙ СТРАНИЦЕ ПРЕДПРОСМОТРА
+        // =============================================================
+        previewContainer.addEventListener('click', function(event) {
+            // Ищем ближайший родительский элемент с классом .clickable-block-wrapper,
+            // начиная от места, где произошел клик.
+            const clickedWrapper = event.target.closest('.clickable-block-wrapper');
+            
+            // Если клик был совершен внутри обертки блока
+            if (clickedWrapper) {
+                // Извлекаем ID блока из data-атрибута обертки
+                const blockIdString = clickedWrapper.getAttribute('data-block-id');
+                
+                if (blockIdString) {
+                    // Преобразуем ID в целое число
+                    const blockId = parseInt(blockIdString, 10);
+                    
+                    // Находим конкретный блок в массиве blocksData по этому ID
+                    const targetBlockData = blocksData.find(function(block) {
+                        return block.id === blockId;
+                    });
+                    
+                    // Если блок найден, открываем модальное окно
+                    if (targetBlockData) {
+                        openBlockInspectorModal(targetBlockData);
+                    } else {
+                        console.warn('Блок с ID ' + blockId + ' не найден в массиве данных.');
+                    }
                 }
             }
         });
 
-        // 2. ФУНКЦИЯ ОТКРЫТИЯ МОДАЛЬНОГО ОКНА
-        function openBlockModal(block) {
-            currentBlockId = block.id;
-            modalTitle.textContent = `${block.name} (ID: ${block.id})`;
-            modalCode.textContent = block.html;
+        // =============================================================
+        // 3. ФУНКЦИЯ ОТКРЫТИЯ МОДАЛЬНОГО ОКНА С КОДОМ
+        // =============================================================
+        function openBlockInspectorModal(blockData) {
+            // Запоминаем ID текущего открытого блока
+            currentOpenBlockId = blockData.id;
+            
+            // Обновляем заголовок окна
+            modalTitleElement.textContent = blockData.name + ' (ID: ' + blockData.id + ')';
+            
+            // Вставляем сырой HTML-код в тег <pre>
+            modalCodeViewer.textContent = blockData.html;
+            
+            // Добавляем класс .active к оверлею, чтобы он появился с анимацией
             modalOverlay.classList.add('active');
-            document.body.style.overflow = 'hidden'; // Запрещаем скролл страницы сзади
+            
+            // Блокируем прокрутку основного окна сзади модалки
+            document.body.style.overflow = 'hidden';
         }
 
-        // 3. ФУНКЦИЯ ЗАКРЫТИЯ МОДАЛЬНОГО ОКНА
-        function closeBlockModal() {
+        // =============================================================
+        // 4. ФУНКЦИЯ ЗАКРЫТИЯ МОДАЛЬНОГО ОКНА
+        // =============================================================
+        function closeBlockInspectorModal() {
+            // Убираем активный класс
             modalOverlay.classList.remove('active');
-            document.body.style.overflow = ''; // Возвращаем скролл
-            currentBlockId = null;
+            
+            // Возвращаем возможность прокрутки основному окну
+            document.body.style.overflow = '';
+            
+            // Сбрасываем ID текущего блока
+            currentOpenBlockId = null;
         }
 
-        // Закрытие по крестику
-        document.getElementById('modal-close').addEventListener('click', closeBlockModal);
-        document.getElementById('modal-close-btn2').addEventListener('click', closeBlockModal);
+        // =============================================================
+        // 5. ОБРАБОТЧИКИ СОБЫТИЙ ДЛЯ ЗАКРЫТИЯ МОДАЛКИ
+        // =============================================================
         
-        // Закрытие по клику на пустое место (фон)
-        modalOverlay.addEventListener('click', function(e) {
-            if (e.target === modalOverlay) {
-                closeBlockModal();
+        // Кнопка закрытия "Крестик"
+        document.getElementById('modal-close-btn').addEventListener('click', closeBlockInspectorModal);
+        
+        // Кнопка закрытия "Закрыть" в подвале
+        document.getElementById('modal-close-btn-2').addEventListener('click', closeBlockInspectorModal);
+        
+        // Клик по пустому фону (затемненному оверлею) вне модалки
+        modalOverlay.addEventListener('click', function(event) {
+            // Проверяем, что клик был именно по оверлею, а не по внутреннему контенту
+            if (event.target === modalOverlay) {
+                closeBlockInspectorModal();
+            }
+        });
+        
+        // Нажатие клавиши Escape на клавиатуре
+        document.addEventListener('keydown', function(event) {
+            // Если нажали Escape и модалка в данный момент открыта
+            if (event.key === 'Escape' && modalOverlay.classList.contains('active')) {
+                closeBlockInspectorModal();
             }
         });
 
-        // Закрытие по нажатию Escape
-        document.addEventListener('keydown', function(e) {
-            if (e.key === 'Escape' && modalOverlay.classList.contains('active')) {
-                closeBlockModal();
-            }
-        });
-
-        // 4. КНОПКА "КОПИРОВАТЬ"
-        document.getElementById('btn-copy').addEventListener('click', function() {
-            const code = modalCode.textContent;
+        // =============================================================
+        // 6. ОБРАБОТЧИК КНОПКИ "КОПИРОВАТЬ КОД"
+        // =============================================================
+        document.getElementById('action-copy-clipboard').addEventListener('click', function() {
+            // Берем текст, который сейчас отображается в теге <pre>
+            const codeString = modalCodeViewer.textContent;
+            
+            // Пытаемся использовать современный Clipboard API
             if (navigator.clipboard) {
-                navigator.clipboard.writeText(code).then(() => {
-                    showToast('✅ Код скопирован в буфер обмена!');
-                }).catch(() => {
-                    fallbackCopyMethod(code);
+                navigator.clipboard.writeText(codeString).then(function() {
+                    showToastNotification('✅ Код успешно скопирован в буфер обмена!');
+                }).catch(function(error) {
+                    console.error('Ошибка Clipboard API:', error);
+                    // Если промис упал, пробуем старый способ копирования
+                    fallbackCopyMethod(codeString);
                 });
             } else {
-                fallbackCopyMethod(code);
+                // Если браузер старый, сразу используем резервный метод
+                fallbackCopyMethod(codeString);
             }
         });
 
-        // Запасной метод копирования (для старых браузеров)
-        function fallbackCopyMethod(text) {
-            const textArea = document.createElement('textarea');
-            textArea.value = text;
-            document.body.appendChild(textArea);
-            textArea.select();
-            try {
-                document.execCommand('copy');
-                showToast('✅ Код скопирован в буфер обмена!');
-            } catch (err) {
-                showToast('❌ Ошибка копирования');
-            }
-            document.body.removeChild(textArea);
-        }
-
-        // 5. ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ УВЕДОМЛЕНИЙ (Toast)
-        function showToast(message) {
-            toast.textContent = message;
-            toast.classList.add('show');
-            setTimeout(() => {
-                toast.classList.remove('show');
-            }, 2500);
-        }
-
-        // 6. КНОПКА "УЛУЧШИТЬ ЧЕРЕЗ ИИ" (Запрос на сервер)
-        document.getElementById('btn-improve').addEventListener('click', function() {
-            const block = blocksData.find(b => b.id === currentBlockId);
-            if (!block) return;
+        // =============================================================
+        // 7. ЗАПАСНОЙ МЕТОД КОПИРОВАНИЯ (ДЛЯ СТАРЫХ БРАУЗЕРОВ)
+        // =============================================================
+        function fallbackCopyMethod(textToCopy) {
+            // Создаем временное скрытое текстовое поле
+            const temporaryTextarea = document.createElement('textarea');
+            temporaryTextarea.value = textToCopy;
+            temporaryTextarea.style.position = 'fixed';
+            temporaryTextarea.style.left = '-9999px';
+            document.body.appendChild(temporaryTextarea);
             
+            // Выделяем текст в этом поле
+            temporaryTextarea.select();
+            temporaryTextarea.setSelectionRange(0, 99999); // Для мобильных устройств
+            
+            // Выполняем команду копирования
+            try {
+                const successful = document.execCommand('copy');
+                if (successful) {
+                    showToastNotification('✅ Код скопирован в буфер обмена!');
+                } else {
+                    showToastNotification('❌ Не удалось скопировать код.');
+                }
+            } catch (error) {
+                console.error('Ошибка резервного копирования:', error);
+                showToastNotification('❌ Ошибка при копировании.');
+            }
+            
+            // Удаляем временное поле из DOM
+            document.body.removeChild(temporaryTextarea);
+        }
+
+        // =============================================================
+        // 8. ОБРАБОТЧИК КНОПКИ "УЛУЧШИТЬ ЧЕРЕЗ ИИ"
+        // =============================================================
+        document.getElementById('action-improve-ai').addEventListener('click', function() {
+            // Проверяем, открыт ли какой-то блок
+            if (currentOpenBlockId === null) {
+                showToastNotification('⚠️ Сначала выберите блок для улучшения.');
+                return;
+            }
+            
+            // Находим данные выбранного блока в массиве
+            const targetBlock = blocksData.find(function(block) {
+                return block.id === currentOpenBlockId;
+            });
+            
+            if (!targetBlock) {
+                showToastNotification('⚠️ Данные блока не найдены.');
+                return;
+            }
+            
+            // Отправляем POST-запрос на сервер Flask
             fetch('/action/improve', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ id: block.id, code: block.html })
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    id: targetBlock.id,
+                    code: targetBlock.html
+                })
             })
-            .then(response => response.json())
-            .then(data => {
-                showToast('🚀 ' + (data.message || 'Запрос на улучшение отправлен!'));
+            .then(function(response) {
+                return response.json();
             })
-            .catch(() => {
-                showToast('❌ Ошибка соединения с модулем улучшения ИИ');
+            .then(function(responseData) {
+                // Если сервер ответил успешно, показываем уведомление
+                showToastNotification('🚀 ' + (responseData.message || 'Запрос на улучшение отправлен!'));
+            })
+            .catch(function(error) {
+                console.error('Ошибка при отправке на ИИ:', error);
+                showToastNotification('❌ Ошибка соединения с модулем улучшения ИИ. Проверьте логи сервера.');
             });
         });
 
-        // 7. КНОПКА "ОТПРАВИТЬ В CHATGPT" (Запрос на сервер)
-        document.getElementById('btn-chatgpt').addEventListener('click', function() {
-            const block = blocksData.find(b => b.id === currentBlockId);
-            if (!block) return;
-
+        // =============================================================
+        // 9. ОБРАБОТЧИК КНОПКИ "ОТПРАВИТЬ В CHATGPT"
+        // =============================================================
+        document.getElementById('action-chatgpt').addEventListener('click', function() {
+            // Проверяем, открыт ли какой-то блок
+            if (currentOpenBlockId === null) {
+                showToastNotification('⚠️ Сначала выберите блок для отправки.');
+                return;
+            }
+            
+            // Находим данные выбранного блока
+            const targetBlock = blocksData.find(function(block) {
+                return block.id === currentOpenBlockId;
+            });
+            
+            if (!targetBlock) {
+                showToastNotification('⚠️ Данные блока не найдены.');
+                return;
+            }
+            
+            // Отправляем POST-запрос на сервер Flask
             fetch('/action/chatgpt', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ id: block.id, code: block.html })
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    id: targetBlock.id,
+                    code: targetBlock.html
+                })
             })
-            .then(response => response.json())
-            .then(data => {
-                showToast('📤 ' + (data.message || 'Отправлено в ChatGPT'));
+            .then(function(response) {
+                return response.json();
             })
-            .catch(() => {
-                showToast('❌ Ошибка отправки в ChatGPT');
+            .then(function(responseData) {
+                // Если сервер ответил успешно, показываем уведомление
+                showToastNotification('📤 ' + (responseData.message || 'Блок отправлен в ChatGPT!'));
+            })
+            .catch(function(error) {
+                console.error('Ошибка при отправке в ChatGPT:', error);
+                showToastNotification('❌ Ошибка отправки в ChatGPT. Проверьте логи сервера.');
             });
         });
+
+        // =============================================================
+        // 10. ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ TOAST-УВЕДОМЛЕНИЙ
+        // =============================================================
+        function showToastNotification(messageText) {
+            // Вставляем текст в элемент уведомления
+            toastMessage.textContent = messageText;
+            
+            // Добавляем класс .visible, чтобы он появился с анимацией
+            toastMessage.classList.add('visible');
+            
+            // Автоматически скрываем уведомление через 3 секунды
+            setTimeout(function() {
+                toastMessage.classList.remove('visible');
+            }, 3000);
+        }
+
     </script>
 </body>
 </html>
 """
 
-# ==========================================
-# 5. ЗАПУСК ВЕБ-СЕРВЕРА (FLASK)
-# ==========================================
-app = Flask(__name__)
+
+# =====================================================================
+# 5. ОБРАБОТЧИКИ МАРШРУТОВ FLASK
+# =====================================================================
 
 @app.route('/')
-def main_page():
+def main_page_controller():
+    """
+    Главный маршрут. Загружает HTML-файл, парсит его, 
+    оборачивает блоки и рендерит страницу.
+    """
     try:
-        # Читаем ваш монолитный HTML файл
-        with open(INPUT_HTML_FILE, 'r', encoding='utf-8') as file:
-            raw_html = file.read()
+        # Пытаемся открыть и прочитать указанный пользователем файл
+        with open(INPUT_HTML_FILE, 'r', encoding='utf-8') as html_file_handle:
+            raw_html_string = html_file_handle.read()
+            
+        # Передаем содержимое файла в нашу функцию парсинга и обертки
+        final_processed_html, blocks_database = parse_and_wrap_html_blocks(raw_html_string)
         
-        # Передаем его в функцию парсинга
-        processed_html, blocks_list = extract_and_wrap_blocks(raw_html)
+        # Преобразуем Python-список блоков в строку JSON
+        blocks_json_string = json.dumps(blocks_database)
         
-        # Встраиваем сгенерированный HTML и JSON-данные в шаблон
-        final_page = HTML_TEMPLATE.replace('{{ GENERATED_HTML | safe }}', processed_html)\
-                                  .replace('{{ BLOCKS_JSON | safe }}', json.dumps(blocks_list))
-        return final_page
+        # Подставляем HTML и JSON в наш главный шаблон
+        final_page_content = FULL_HTML_INTERFACE_TEMPLATE.replace(
+            '{{ GENERATED_HTML | safe }}', final_processed_html
+        ).replace(
+            '{{ BLOCKS_JSON | safe }}', blocks_json_string
+        )
+        
+        # Возвращаем сгенерированную страницу клиенту
+        return final_page_content
         
     except FileNotFoundError:
-        return f"""
-        <div style="padding:50px; font-family:sans-serif;">
-            <h1>❌ Ошибка: Файл не найден</h1>
-            <p>Скрипт не смог найти файл: <b>{INPUT_HTML_FILE}</b></p>
-            <p>Запустите скрипт с указанием пути к вашему HTML файлу:</p>
-            <pre>python inspector.py путь_к_вашему_файлу.html</pre>
+        # Если файл не найден, возвращаем HTML с ошибкой
+        error_message = f"""
+        <div style="padding: 40px; font-family: sans-serif; max-width: 800px; margin: 0 auto;">
+            <h1 style="color: #dc2626;">❌ Файл не найден</h1>
+            <p style="font-size: 18px;">Скрипт не может найти HTML-файл по указанному пути:</p>
+            <pre style="background: #f3f4f6; padding: 15px; border-radius: 8px; font-weight: bold;">{os.path.abspath(INPUT_HTML_FILE)}</pre>
+            <p>Чтобы исправить это:</p>
+            <ul>
+                <li>Переименуйте ваш монолитный HTML-файл в <b>upload.html</b> и положите его рядом со скриптом.</li>
+                <li>Либо передайте путь к файлу при запуске: <code>python inspector_full.py путь_к_файлу.html</code></li>
+            </ul>
         </div>
         """
+        return error_message, 404
 
-# Обработчики кнопок (заглушки для интеграции с AI API)
+
 @app.route('/action/improve', methods=['POST'])
-def api_improve():
-    data = request.json
-    print(f"[СЕРВЕР] Получен запрос на улучшение блока #{data.get('id')}")
-    # ВСТАВЬТЕ СЮДА ВАШУ ЛОГИКУ РАБОТЫ С OpenAI / Gemini / YandexGPT
-    return jsonify({'status': 'ok', 'message': 'ИИ начал обработку (заглушка)'})
+def backend_improve_ai_endpoint():
+    """
+    Эндпоинт для кнопки "Улучшить через ИИ".
+    Принимает JSON с ID и кодом блока.
+    """
+    try:
+        incoming_data = request.json
+        print(f"\n[СЕРВЕР - УЛУЧШЕНИЕ] Получен запрос на улучшение блока #{incoming_data.get('id')}")
+        print(f"[Исходный код]:\n{incoming_data.get('code')[:200]}... (сокращено для лога)")
+        print("-" * 40)
+        
+        # =============================================================
+        # ВСТАВЬТЕ СЮДА ВАШУ ЛОГИКУ ВЫЗОВА OpenAI/GPT API.
+        # Например: response = openai.ChatCompletion.create(...)
+        # =============================================================
+        
+        # Отправляем успешный заглушечный ответ
+        return jsonify({
+            'status': 'ok',
+            'message': 'ИИ принял код в обработку (Заглушка. Вставьте свой API вызов в функцию backend_improve_ai_endpoint).'
+        })
+    except Exception as error:
+        print(f"[ОШИБКА] {error}")
+        return jsonify({'status': 'error', 'message': str(error)}), 500
+
 
 @app.route('/action/chatgpt', methods=['POST'])
-def api_chatgpt():
-    data = request.json
-    print(f"[СЕРВЕР] Получен запрос на отправку в ChatGPT блока #{data.get('id')}")
-    # ВСТАВЬТЕ СЮДА ВАШУ ЛОГИКУ ОТПРАВКИ В ChatGPT API
-    return jsonify({'status': 'ok', 'message': 'Блок передан в ChatGPT (заглушка)'})
+def backend_chatgpt_endpoint():
+    """
+    Эндпоинт для кнопки "Отправить в ChatGPT".
+    Принимает JSON с ID и кодом блока.
+    """
+    try:
+        incoming_data = request.json
+        print(f"\n[СЕРВЕР - CHATGPT] Получен запрос на отправку в ChatGPT блока #{incoming_data.get('id')}")
+        print(f"[Код для ChatGPT]:\n{incoming_data.get('code')[:200]}... (сокращено для лога)")
+        print("-" * 40)
+        
+        # =============================================================
+        # ВСТАВЬТЕ СЮДА ВАШУ ЛОГИКУ ВЫЗОВА ChatGPT API ИЛИ
+        # ПЕРЕДАЧИ ДАННЫХ В TELEGRAM, DISCORD ИЛИ ДРУГУЮ СИСТЕМУ.
+        # =============================================================
+        
+        # Отправляем успешный заглушечный ответ
+        return jsonify({
+            'status': 'ok',
+            'message': 'Код передан в ChatGPT (Заглушка. Вставьте свой API вызов в функцию backend_chatgpt_endpoint).'
+        })
+    except Exception as error:
+        print(f"[ОШИБКА] {error}")
+        return jsonify({'status': 'error', 'message': str(error)}), 500
+
+
+# =====================================================================
+# 6. ТОЧКА ВХОДА В ПРОГРАММУ (МЕЙН)
+# =====================================================================
 
 if __name__ == '__main__':
-    print("="*60)
-    print("🚀 ЗАПУСК ИНТЕРАКТИВНОГО ИНСПЕКТОРА HTML")
-    print(f"📁 Загружаемый файл: {os.path.abspath(INPUT_HTML_FILE)}")
-    print("🌐 Откройте в браузере: http://127.0.0.1:5000")
-    print("="*60)
-    print("⚠️  ВАЖНО: В функции extract_and_wrap_blocks замените поиск")
-    print("   'div class=\"block-desc\"' на ваш личный алгоритм разбиения.")
-    print("="*60)
-    app.run(debug=True, port=5000, host='127.0.0.1')
+    
+    # Проверяем, существует ли переданный файл прямо сейчас, чтобы дать раннюю ошибку
+    if not os.path.exists(INPUT_HTML_FILE):
+        print("=" * 70)
+        print(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Файл '{INPUT_HTML_FILE}' не найден.")
+        print("Убедитесь, что файл лежит рядом со скриптом, или передайте путь.")
+        print("=" * 70)
+    else:
+        print("=" * 70)
+        print("🚀 ИНТЕРАКТИВНЫЙ ИНСПЕКТОР HTML ЗАПУЩЕН")
+        print(f"📁 Загружаемый исходный файл: {os.path.abspath(INPUT_HTML_FILE)}")
+        print(f"🛠️  Поиск блоков по селектору: '{BLOCK_CSS_SELECTOR}'")
+        print("🌐 Откройте интерфейс в браузере: http://127.0.0.1:5000")
+        print("💡 Чтобы закрыть сервер, нажмите Ctrl+C в консоли.")
+        print("=" * 70)
+        
+    # Запускаем веб-сервер Flask (debug=True выводит ошибки прямо в консоль)
+    app.run(debug=True, host='127.0.0.1', port=5000)
