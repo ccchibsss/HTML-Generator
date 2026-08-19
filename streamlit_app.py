@@ -441,7 +441,7 @@ def improve_block_with_ai(content, description, block_type, provider='OpenAI', a
             return improve_with_openai(content, description, block_type, api_key)
         elif provider == 'DeepSeek':
             return improve_with_deepseek(content, description, block_type, api_key)
-        elif provider == 'Claude':
+        elif provider == 'Claude (Anthropic)':
             return improve_with_claude(content, description, block_type, api_key)
         else:
             return improve_block_local(content, description, block_type)
@@ -1151,7 +1151,7 @@ else:
             
             # Используем HTML для красивого отображения
             block_html = f"""
-            <div class="{card_class}" onclick="document.getElementById('select_block_{i}').click()">
+            <div class="{card_class}">
                 <div class="block-label">
                     <span>{block['name']}</span>
                     <span>
@@ -1165,12 +1165,13 @@ else:
             """
             st.markdown(block_html, unsafe_allow_html=True)
             
-            # Скрытая кнопка для клика
-            if st.button("", key=f"select_block_{i}", type="primary", use_container_width=True, style="display:none;"):
+            # ===== ИСПРАВЛЕННАЯ КНОПКА ВЫБОРА (без style) =====
+            # Делаем видимую кнопку "Выбрать" вместо скрытой
+            if st.button(f"📌 Выбрать {block['name']}", key=f"select_block_{i}", use_container_width=True):
                 st.session_state.selected_index = original_index
                 st.rerun()
             
-            # Кнопка быстрого улучшения
+            # Кнопки быстрых действий
             col_action1, col_action2 = st.columns(2)
             with col_action1:
                 if st.button(f"🤖 Улучшить", key=f"quick_improve_{i}", use_container_width=True):
