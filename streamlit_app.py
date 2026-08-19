@@ -1,1306 +1,507 @@
-import streamlit as st
-import re
-import json
-import base64
-from datetime import datetime
-import requests
-import time
 import os
-from typing import List, Dict, Any, Optional
+import sys
+import json
+from flask import Flask, render_template_string, request, jsonify
+from bs4 import BeautifulSoup
 
-# ======================================================================
-# НАСТРОЙКА СТРАНИЦЫ
-# ======================================================================
-st.set_page_config(
-    page_title="Визуальный HTML-конструктор PRO",
-    page_icon="🚀",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# ==========================================
+# 1. КОНФИГУРАЦИЯ И ЗАГРУЗКА ФАЙЛА
+# ==========================================
+# По умолчанию скрипт ищет файл 'upload.html' в папке со скриптом.
+# Вы можете указать путь к файлу при запуске: python inspector.py путь/к/вашему.html
+INPUT_HTML_FILE = "upload.html"
+if len(sys.argv) > 1:
+    INPUT_HTML_FILE = sys.argv[1]
 
-# ======================================================================
-# РАСШИРЕННЫЙ CSS ДЛЯ ВИЗУАЛЬНОГО ОТОБРАЖЕНИЯ
-# ======================================================================
-st.markdown("""
-<style>
-    /* --- ГЛАВНЫЙ ЗАГОЛОВОК --- */
-    .main-header {
-        font-size: 2.8rem;
-        font-weight: 900;
-        background: linear-gradient(135deg, #ff5a1e 0%, #8b5cf6 50%, #06b6d4 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        background-clip: text;
-        margin-bottom: 0.3rem;
-        letter-spacing: -0.02em;
-    }
-    .sub-header {
-        font-size: 1.1rem;
-        color: #6c757d;
-        margin-bottom: 1.5rem;
-    }
-
-    /* --- ГАЙД ДЛЯ НОВИЧКОВ --- */
-    .guide-box {
-        background: #f8f9fa;
-        border-radius: 16px;
-        padding: 20px 24px;
-        border: 2px solid #dee2e6;
-        margin-bottom: 20px;
-    }
-    .guide-step {
-        display: flex;
-        align-items: flex-start;
-        gap: 12px;
-        margin: 8px 0;
-        padding: 6px 0;
-    }
-    .guide-step .num {
-        background: #ff5a1e;
-        color: white;
-        border-radius: 50%;
-        width: 28px;
-        height: 28px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-weight: 700;
-        font-size: 14px;
-        flex-shrink: 0;
-    }
-    .guide-step .text {
-        font-size: 0.95rem;
-        color: #1a1a2e;
-        line-height: 1.5;
-    }
-    .guide-step .text small {
-        color: #6c757d;
-        font-size: 0.85rem;
-    }
-
-    /* --- КАРТОЧКИ БЛОКОВ С МИНИАТЮРАМИ --- */
-    .block-card {
-        background: white;
-        border-radius: 12px;
-        padding: 12px 14px;
-        margin-bottom: 14px;
-        border: 2px solid #e9ecef;
-        cursor: pointer;
-        transition: all 0.2s ease;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.04);
-    }
-    .block-card:hover {
-        border-color: #ff5a1e;
-        transform: translateX(4px);
-        box-shadow: 0 4px 16px rgba(0,0,0,0.08);
-    }
-    .block-card.selected {
-        border-color: #8b5cf6;
-        background: #f8f4ff;
-        box-shadow: 0 4px 12px rgba(139,92,246,0.15);
-    }
-    .block-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 6px;
-    }
-    .block-name {
-        font-weight: 700;
-        font-size: 0.95rem;
-        color: #1a1a2e;
-    }
-    .block-badges {
-        display: flex;
-        gap: 6px;
-        align-items: center;
-    }
-    .badge-improved {
-        background: #10b981;
-        color: white;
-        padding: 2px 10px;
-        border-radius: 99px;
-        font-size: 0.6rem;
-        font-weight: 700;
-        text-transform: uppercase;
-    }
-    .badge-size {
-        background: #e9ecef;
-        color: #495057;
-        padding: 2px 10px;
-        border-radius: 99px;
-        font-size: 0.7rem;
-        font-weight: 600;
-    }
-    .block-desc {
-        font-size: 0.8rem;
-        color: #6c757d;
-        margin-bottom: 6px;
-        font-style: italic;
-    }
-    .block-meta {
-        display: flex;
-        gap: 10px;
-        flex-wrap: wrap;
-        font-size: 0.7rem;
-        color: #adb5bd;
-        margin-top: 4px;
-    }
-    .block-meta .category-badge {
-        background: #e9ecef;
-        padding: 0 8px;
-        border-radius: 99px;
-        font-weight: 600;
-        color: #495057;
-    }
-
-    /* --- МИНИАТЮРА HTML (реальное визуальное превью) --- */
-    .mini-preview {
-        border: 1px solid #dee2e6;
-        border-radius: 8px;
-        background: white;
-        padding: 6px;
-        margin-top: 6px;
-        max-height: 120px;
-        overflow: hidden;
-        position: relative;
-        font-size: 0.7rem;
-        line-height: 1.4;
-        transition: all 0.2s;
-    }
-    .mini-preview iframe {
-        width: 100%;
-        height: 120px;
-        border: none;
-        border-radius: 6px;
-        pointer-events: none;
-        transform: scale(0.8);
-        transform-origin: top left;
-        width: 125%;
-        height: 150px;
-        margin-left: -12.5%;
-    }
-    .mini-preview .fade {
-        position: absolute;
-        bottom: 0;
-        left: 0;
-        right: 0;
-        height: 30px;
-        background: linear-gradient(transparent, white);
-        pointer-events: none;
-    }
-    .mini-label {
-        font-size: 0.6rem;
-        color: #adb5bd;
-        margin-top: 4px;
-        text-align: right;
-    }
-
-    /* --- МЕТРИКИ ДАШБОРДА --- */
-    .metric-card {
-        background: white;
-        border-radius: 12px;
-        padding: 16px 20px;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-        border: 1px solid #e9ecef;
-        text-align: center;
-        transition: all 0.2s;
-    }
-    .metric-card:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 4px 16px rgba(0,0,0,0.1);
-    }
-    .metric-value {
-        font-size: 2rem;
-        font-weight: 800;
-        color: #1a1a2e;
-    }
-    .metric-label {
-        font-size: 0.8rem;
-        color: #6c757d;
-        font-weight: 500;
-    }
-    .metric-icon {
-        font-size: 1.8rem;
-        margin-bottom: 4px;
-    }
-
-    /* --- РЕДАКТОР СТИЛЕЙ --- */
-    .style-editor {
-        background: #f8f9fa;
-        border-radius: 10px;
-        padding: 14px;
-        border: 1px solid #e9ecef;
-    }
-    .style-editor label {
-        font-weight: 600;
-        font-size: 0.85rem;
-        color: #1a1a2e;
-    }
-
-    /* --- ГЕНЕРАТОР КОДА --- */
-    .generator-box {
-        background: linear-gradient(135deg, #f8f9fa, #e9ecef);
-        border-radius: 12px;
-        padding: 16px;
-        border: 2px dashed #dee2e6;
-    }
-
-    /* --- ИНФОРМАЦИОННЫЕ БОКСЫ --- */
-    .info-box {
-        background: #dbeafe;
-        border-radius: 10px;
-        padding: 14px 18px;
-        border-left: 4px solid #3b82f6;
-        margin: 8px 0;
-    }
-    .success-box {
-        background: #d1fae5;
-        border-radius: 10px;
-        padding: 14px 18px;
-        border-left: 4px solid #10b981;
-        margin: 8px 0;
-    }
-    .warning-box {
-        background: #fef3c7;
-        border-radius: 10px;
-        padding: 14px 18px;
-        border-left: 4px solid #f59e0b;
-        margin: 8px 0;
-    }
-
-    /* --- АДАПТИВНОСТЬ --- */
-    @media (max-width: 768px) {
-        .main-header { font-size: 1.8rem; }
-        .metric-value { font-size: 1.4rem; }
-        .guide-step .text { font-size: 0.85rem; }
-    }
-
-    /* --- ТЁМНАЯ ТЕМА (автоматическая) --- */
-    @media (prefers-color-scheme: dark) {
-        .block-card { background: #2d2d3d; border-color: #3d3d5d; }
-        .block-card.selected { background: #3d3d5d; }
-        .block-name { color: #f0f0f0; }
-        .block-desc { color: #b0b0c0; }
-        .mini-preview { background: #1a1a2e; border-color: #3d3d5d; }
-        .mini-preview .fade { background: linear-gradient(transparent, #1a1a2e); }
-        .metric-card { background: #2d2d3d; border-color: #3d3d5d; }
-        .metric-value { color: #f0f0f0; }
-        .guide-box { background: #2d2d3d; border-color: #3d3d5d; }
-        .guide-step .text { color: #e0e0e0; }
-        .info-box { background: #1e2a4a; border-left-color: #3b82f6; }
-        .success-box { background: #1a3a2a; border-left-color: #10b981; }
-        .warning-box { background: #3a2a1a; border-left-color: #f59e0b; }
-        .style-editor { background: #2d2d3d; border-color: #3d3d5d; }
-        .generator-box { background: #2d2d3d; border-color: #3d3d5d; }
-    }
-</style>
-""", unsafe_allow_html=True)
-
-# ======================================================================
-# ИНИЦИАЛИЗАЦИЯ СОСТОЯНИЯ
-# ======================================================================
-if 'blocks' not in st.session_state:
-    st.session_state.blocks = []  # Список всех блоков
-if 'original_html' not in st.session_state:
-    st.session_state.original_html = ''  # Исходный HTML
-if 'selected_index' not in st.session_state:
-    st.session_state.selected_index = -1  # Индекс выбранного блока
-if 'undo_history' not in st.session_state:
-    st.session_state.undo_history = []  # История изменений
-if 'ai_improved_blocks' not in st.session_state:
-    st.session_state.ai_improved_blocks = set()  # ID улучшенных блоков
-if 'style_config' not in st.session_state:
-    st.session_state.style_config = {
-        'primary_color': '#ff5a1e',
-        'secondary_color': '#8b5cf6',
-        'font_family': 'Inter, system-ui, sans-serif',
-        'border_radius': '12px',
-        'shadow_intensity': '0.08'
-    }
-if 'generated_blocks' not in st.session_state:
-    st.session_state.generated_blocks = []  # Сгенерированные блоки
-if 'api_key' not in st.session_state:
-    st.session_state.api_key = ''
-if 'api_provider' not in st.session_state:
-    st.session_state.api_provider = 'Встроенный ИИ (без API)'
-if 'analysis_data' not in st.session_state:
-    st.session_state.analysis_data = {}
-if 'show_guide' not in st.session_state:
-    st.session_state.show_guide = True
-
-# ======================================================================
-# ОСНОВНЫЕ ФУНКЦИИ
-# ======================================================================
-
-def parse_blocks(html: str) -> List[Dict[str, Any]]:
+# ==========================================
+# 2. ФУНКЦИЯ ПАРСИНГА (ЗАМЕНИТЕ НА ВАШУ)
+# ==========================================
+def extract_and_wrap_blocks(html_content):
     """
-    Разбивает HTML-документ на блоки: таблицы, карточки, секции, кнопки, формы,
-    навигацию, изображения и списки. Возвращает список словарей с метаданными.
+    Эта функция принимает ваш монолитный HTML.
+    Она должна найти каждый блок и обернуть его в div с data-block-id.
     """
-    blocks = []
-    patterns = [
-        {
-            'name': 'Таблица',
-            'pattern': r'<table[^>]*>[\s\S]*?<\/table>',
-            'desc': 'Таблица с данными (строки и столбцы)',
-            'icon': '📊',
-            'category': 'Таблицы',
-            'explanation': 'Используется для отображения структурированных данных: товары, заказы, статистика.'
-        },
-        {
-            'name': 'Карточка',
-            'pattern': r'<div[^>]*class="[^"]*card[^"]*"[^>]*>[\s\S]*?<\/div>',
-            'desc': 'Карточка товара или элемента',
-            'icon': '🃏',
-            'category': 'Карточки',
-            'explanation': 'Блок с изображением, заголовком, описанием и кнопкой.'
-        },
-        {
-            'name': 'Секция',
-            'pattern': r'<section[^>]*>[\s\S]*?<\/section>',
-            'desc': 'Секция страницы',
-            'icon': '📐',
-            'category': 'Секции',
-            'explanation': 'Крупный логический блок: "О нас", "Контакты", "Почему мы".'
-        },
-        {
-            'name': 'Кнопка',
-            'pattern': r'<button[^>]*>[\s\S]*?<\/button>',
-            'desc': 'Интерактивная кнопка',
-            'icon': '🔘',
-            'category': 'Интерактив',
-            'explanation': 'Элемент для действий: купить, отправить, перейти.'
-        },
-        {
-            'name': 'Форма',
-            'pattern': r'<form[^>]*>[\s\S]*?<\/form>',
-            'desc': 'Форма ввода',
-            'icon': '📝',
-            'category': 'Формы',
-            'explanation': 'Сбор данных пользователя: заявки, обратная связь.'
-        },
-        {
-            'name': 'Навигация',
-            'pattern': r'<nav[^>]*>[\s\S]*?<\/nav>',
-            'desc': 'Навигационное меню',
-            'icon': '🧭',
-            'category': 'Навигация',
-            'explanation': 'Меню для перемещения по сайту.'
-        },
-        {
-            'name': 'Изображение',
-            'pattern': r'<img[^>]*>',
-            'desc': 'Изображение',
-            'icon': '🖼️',
-            'category': 'Медиа',
-            'explanation': 'Графический элемент для иллюстрации.'
-        },
-        {
-            'name': 'Список',
-            'pattern': r'<ul[^>]*>[\s\S]*?<\/ul>|<ol[^>]*>[\s\S]*?<\/ol>',
-            'desc': 'Маркированный или нумерованный список',
-            'icon': '📋',
-            'category': 'Списки',
-            'explanation': 'Перечень пунктов: преимущества, шаги инструкции.'
-        }
-    ]
+    soup = BeautifulSoup(html_content, 'html.parser')
+    blocks_data = []
+    
+    # ==========================================
+    # ВАЖНО: Вставьте сюда ваш алгоритм разбиения на блоки.
+    # На скриншоте у вас есть блоки с классами block-desc и block-meta.
+    # Я написал пример поиска всех прямых дочерних элементов внутри body.
+    # Если ваши блоки заканчиваются тегами, используйте свой парсер.
+    # ==========================================
+    
+    # Ищем корневой контейнер. Чаще всего это body.
+    container = soup.body
+    if not container:
+        container = soup.find('div', class_='main-container') # Если есть обертка
+    
+    # ПРИМЕР: Поиск всех блоков с вашим классом (замените на ваш реальный селектор!)
+    # Если ваши блоки это <div class="block-desc">, ищите по нему:
+    block_elements = container.find_all('div', class_='block-desc', recursive=False)
+    
+    # Если не нашли по классу (для теста скрипта), берем все прямые дочерние элементы body
+    if not block_elements:
+        block_elements = [child for child in container.find_all(recursive=False) if child.name]
 
-    for p in patterns:
-        matches = re.finditer(p['pattern'], html, re.IGNORECASE | re.DOTALL)
-        for match in matches:
-            blocks.append({
-                'name': f"{p['icon']} {p['name']} #{len(blocks)+1}",
-                'content': match.group(0),
-                'original': match.group(0),
-                'desc': p['desc'],
-                'icon': p['icon'],
-                'category': p['category'],
-                'explanation': p['explanation'],
-                'size': len(match.group(0)),
-                'lines': match.group(0).count('\n') + 1,
-                'is_improved': False,
-                'preview_html': match.group(0)[:500] + ('…' if len(match.group(0)) > 500 else '')
-            })
-
-    if not blocks:
-        blocks.append({
-            'name': '📄 Весь HTML',
-            'content': html,
-            'original': html,
-            'desc': 'Полный HTML-документ',
-            'icon': '📄',
-            'category': 'Документ',
-            'explanation': 'Файл целиком, если не удалось разбить на блоки.',
-            'size': len(html),
-            'lines': html.count('\n') + 1,
-            'is_improved': False,
-            'preview_html': html[:500] + '…'
+    # ==========================================
+    # Оборачиваем найденные элементы в интерактивные блоки
+    # ==========================================
+    for index, element in enumerate(block_elements):
+        block_id = index + 1
+        
+        # Сохраняем оригинальный HTML этого конкретного блока
+        raw_html = str(element)
+        
+        # Создаем обертку с уникальным ID
+        wrapper = soup.new_tag('div')
+        wrapper['class'] = 'block-wrapper'
+        wrapper['data-block-id'] = str(block_id)
+        # Для облегчения отладки можно записать имя:
+        wrapper['data-block-name'] = f'Блок #{block_id}'
+        
+        # Оборачиваем элемент в нашу обертку (DOM манипуляция)
+        element.wrap(wrapper)
+        
+        # Добавляем данные в список для передачи в JavaScript
+        blocks_data.append({
+            'id': block_id,
+            'html': raw_html,
+            'name': f'Блок #{block_id}'
         })
 
-    return blocks
+    # Возвращаем модифицированный HTML и JSON с данными
+    return str(soup), blocks_data
 
-def improve_block_local(content: str) -> str:
-    """
-    Встроенный ИИ-улучшатель (без API): добавляет классы, атрибуты доступности,
-    hover-эффекты и семантические теги.
-    """
-    improved = content
+# ==========================================
+# 3. ШАБЛОН HTML (С CSS И JS ИНТЕРАКТИВНОСТЬЮ)
+# ==========================================
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Инспектор HTML блоков</title>
+    <style>
+        /* Сброс базовых отступов браузера */
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        /* Настройка главного окна на весь экран */
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background: #f8f9fa;
+            height: 100vh;
+            overflow: hidden;
+        }
+        
+        #preview-container {
+            width: 100%;
+            height: 100vh;
+            overflow-y: auto; /* Прокрутка страницы внутри */
+            padding: 30px;
+            background: #ffffff;
+            position: relative;
+        }
 
-    # Добавляем класс "improved" если нет
-    if 'class="' in improved and 'improved' not in improved:
-        improved = improved.replace('class="', 'class="improved ')
+        /* Стиль обертки: при наведении - синяя рамка */
+        .block-wrapper {
+            display: block;         /* Чтобы рамка охватывала весь блок */
+            position: relative;
+            cursor: pointer;
+            transition: outline 0.15s ease-in-out, background-color 0.15s ease-in-out;
+            border-radius: 3px;
+        }
 
-    # Добавляем aria-атрибуты для доступности
-    if 'aria-label' not in improved and '<button' in improved:
-        improved = improved.replace('<button', '<button aria-label="Кнопка"')
-    if 'alt="' not in improved and '<img' in improved:
-        improved = improved.replace('<img', '<img alt="Изображение"')
-    if 'aria-label' not in improved and '<input' in improved:
-        improved = improved.replace('<input', '<input aria-label="Поле ввода"')
+        .block-wrapper:hover {
+            outline: 3px solid #3b82f6; /* Синяя рамка как в DevTools */
+            outline-offset: -3px;
+            background-color: rgba(59, 130, 246, 0.05); /* Легкий синий фон при наведении */
+            z-index: 10;
+        }
+        
+        /* Стили модального окна с кодом */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0, 0, 0, 0.6);
+            backdrop-filter: blur(4px);
+            z-index: 9999;
+            justify-content: center;
+            align-items: center;
+        }
+        
+        .modal-overlay.active {
+            display: flex;
+        }
 
-    # Улучшаем таблицы — первую строку делаем заголовком
-    if '<tr' in improved and '<td' in improved:
-        lines = improved.split('\n')
-        for i, line in enumerate(lines):
-            if '<tr' in line and '<td' in line and '<th' not in line:
-                lines[i] = line.replace('<td', '<th').replace('</td>', '</th>')
-                break
-        improved = '\n'.join(lines)
+        .modal-box {
+            background: #ffffff;
+            border-radius: 16px;
+            width: 90%;
+            max-width: 900px;
+            max-height: 90vh;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 25px 50px -12px rgba(0,0,0,0.25);
+            overflow: hidden;
+            animation: modalSlide 0.2s ease-out;
+        }
 
-    # Добавляем hover-эффекты
-    if 'hover:' not in improved and 'class="' in improved:
-        improved = improved.replace('class="', 'class="hover:shadow-lg transition-all duration-300 ')
+        @keyframes modalSlide {
+            from { opacity: 0; transform: translateY(-20px) scale(0.95); }
+            to { opacity: 1; transform: translateY(0) scale(1); }
+        }
 
-    # Улучшаем карточки: добавляем transform и тени
-    if 'card' in improved.lower() or 'product' in improved.lower():
-        if 'transform' not in improved:
-            improved = improved.replace('class="', 'class="transform hover:scale-105 ')
-        if 'shadow' not in improved:
-            improved = improved.replace('class="', 'class="shadow-md hover:shadow-xl ')
-        if 'rounded' not in improved:
-            improved = improved.replace('class="', 'class="rounded-xl ')
+        /* Шапка модалки */
+        .modal-header {
+            padding: 20px 24px;
+            border-bottom: 1px solid #e5e7eb;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: #f9fafb;
+        }
 
-    # Семантические теги
-    if '<div' in improved and ('Секция' in improved or 'section' in improved.lower()):
-        improved = improved.replace('<div', '<section').replace('</div>', '</section>')
-    if '<div' in improved and ('Карточка' in improved or 'card' in improved.lower()):
-        improved = improved.replace('<div', '<article').replace('</div>', '</article>')
+        .modal-header h2 {
+            font-size: 20px;
+            font-weight: 600;
+            color: #111827;
+            margin: 0;
+        }
 
-    # Микроразметка Schema.org
-    if 'itemscope' not in improved and ('Карточка' in improved or 'Product' in improved):
-        improved = improved.replace('<article', '<article itemscope itemtype="https://schema.org/Product"')
-        if 'itemprop="name"' not in improved:
-            improved = improved.replace('<h3', '<h3 itemprop="name"')
-        if 'itemprop="price"' not in improved:
-            improved = improved.replace('class="price"', 'class="price" itemprop="price"')
-        if 'itemprop="brand"' not in improved:
-            improved = improved.replace('<div class="brand"', '<div class="brand" itemprop="brand"')
+        .modal-close {
+            background: none;
+            border: none;
+            font-size: 28px;
+            cursor: pointer;
+            color: #6b7280;
+            padding: 4px 12px;
+            border-radius: 6px;
+            transition: background 0.2s;
+        }
 
-    # Добавляем комментарий
-    if '<!--' not in improved:
-        improved = f'<!-- Улучшено встроенным ИИ -->\n{improved}'
+        .modal-close:hover {
+            background: #e5e7eb;
+            color: #111827;
+        }
 
-    # Добавляем базовые стили
-    if 'style="' not in improved and 'style=' not in improved:
-        improved = improved.replace('class="', 'style="' + get_style_from_config() + '" class="')
+        /* Тело модалки (Код) */
+        .modal-body {
+            padding: 20px 24px;
+            overflow-y: auto;
+            flex: 1;
+            background: #f8fafc;
+        }
 
-    return improved
+        .modal-body pre {
+            background: #1e293b;
+            color: #e2e8f0;
+            padding: 20px;
+            border-radius: 8px;
+            overflow-x: auto;
+            font-size: 14px;
+            line-height: 1.6;
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            margin: 0;
+            white-space: pre-wrap;
+            word-break: break-all;
+            box-shadow: inset 0 2px 4px rgba(0,0,0,0.1);
+        }
 
-def get_style_from_config() -> str:
-    """Возвращает CSS-строку из конфигурации стилей."""
-    config = st.session_state.style_config
-    return (f"color:{config.get('primary_color', '#ff5a1e')};"
-            f"border-radius:{config.get('border_radius', '12px')};"
-            f"font-family:{config.get('font_family', 'Inter, sans-serif')};"
-            f"box-shadow:0 4px 12px rgba(0,0,0,{config.get('shadow_intensity', '0.08')});")
+        /* Подвал модалки (Кнопки) */
+        .modal-footer {
+            padding: 16px 24px 24px 24px;
+            border-top: 1px solid #e5e7eb;
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            background: #f9fafb;
+        }
 
-def generate_block_from_description(description: str) -> str:
-    """
-    Генерирует HTML-блок по текстовому описанию (используется в генераторе).
-    """
-    templates = {
-        'карточка': '''
-<div class="card hover:shadow-xl transition-all duration-300 transform hover:scale-105 rounded-xl p-6 bg-white border border-gray-200">
-    <img src="https://via.placeholder.com/300x200" alt="Изображение товара" class="w-full h-48 object-cover rounded-lg">
-    <h3 class="text-xl font-bold mt-4">Название товара</h3>
-    <p class="text-gray-600 mt-2">Описание товара. Здесь может быть краткая информация.</p>
-    <div class="flex items-center justify-between mt-4">
-        <span class="text-2xl font-bold text-orange-500">1 299 ₽</span>
-        <button class="bg-orange-500 hover:bg-orange-600 text-white px-6 py-2 rounded-lg font-semibold transition">Купить</button>
+        .modal-btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+            letter-spacing: 0.3px;
+        }
+
+        /* Кнопка Улучшить - красная (как на скрине) */
+        .modal-btn.improve {
+            background: #ef4444;
+            color: white;
+        }
+        .modal-btn.improve:hover { background: #dc2626; transform: translateY(-1px); }
+
+        /* Кнопка ChatGPT - зеленая */
+        .modal-btn.chatgpt {
+            background: #10a37f;
+            color: white;
+        }
+        .modal-btn.chatgpt:hover { background: #0e8b6b; transform: translateY(-1px); }
+
+        /* Кнопка Копировать - серая */
+        .modal-btn.copy {
+            background: #e5e7eb;
+            color: #374151;
+        }
+        .modal-btn.copy:hover { background: #d1d5db; }
+
+        /* Кнопка Закрыть - прозрачная */
+        .modal-btn.cancel {
+            margin-left: auto;
+            background: transparent;
+            color: #6b7280;
+        }
+        .modal-btn.cancel:hover { background: #f3f4f6; }
+        
+        /* Тост-уведомления */
+        .toast {
+            position: fixed;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #1f2937;
+            color: white;
+            padding: 14px 28px;
+            border-radius: 10px;
+            font-size: 15px;
+            box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1);
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            z-index: 99999;
+            pointer-events: none;
+        }
+        .toast.show { opacity: 1; }
+    </style>
+</head>
+<body>
+    <!-- 1. ОБЛАСТЬ ПРЕДПРОСМОТРА -->
+    <div id="preview-container">
+        {{ GENERATED_HTML | safe }}
     </div>
-</div>''',
-        'таблица': '''
-<table class="w-full border-collapse rounded-xl overflow-hidden shadow-md">
-    <thead class="bg-gray-800 text-white">
-        <tr>
-            <th class="px-4 py-3 text-left">Артикул</th>
-            <th class="px-4 py-3 text-left">Название</th>
-            <th class="px-4 py-3 text-left">Цена</th>
-            <th class="px-4 py-3 text-left">Статус</th>
-        </tr>
-    </thead>
-    <tbody class="bg-white divide-y divide-gray-200">
-        <tr class="hover:bg-gray-50 transition">
-            <td class="px-4 py-3 font-mono">ART-001</td>
-            <td class="px-4 py-3">Товар 1</td>
-            <td class="px-4 py-3 font-semibold text-green-600">1 299 ₽</td>
-            <td class="px-4 py-3"><span class="bg-green-100 text-green-800 px-2 py-1 rounded-full text-xs">В наличии</span></td>
-        </tr>
-        <tr class="hover:bg-gray-50 transition">
-            <td class="px-4 py-3 font-mono">ART-002</td>
-            <td class="px-4 py-3">Товар 2</td>
-            <td class="px-4 py-3 font-semibold text-green-600">2 499 ₽</td>
-            <td class="px-4 py-3"><span class="bg-yellow-100 text-yellow-800 px-2 py-1 rounded-full text-xs">Под заказ</span></td>
-        </tr>
-    </tbody>
-</table>''',
-        'кнопка': '''
-<button class="bg-gradient-to-r from-orange-500 to-purple-600 hover:from-orange-600 hover:to-purple-700 text-white font-bold py-3 px-8 rounded-xl shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105">
-    🚀 Действие
-</button>''',
-        'форма': '''
-<form class="bg-white p-6 rounded-xl shadow-lg max-w-md">
-    <h3 class="text-xl font-bold mb-4">Форма обратной связи</h3>
-    <div class="mb-4">
-        <label class="block text-sm font-medium text-gray-700 mb-1">Имя</label>
-        <input type="text" placeholder="Введите имя" class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent">
-    </div>
-    <div class="mb-4">
-        <label class="block text-sm font-medium text-gray-700 mb-1">Email</label>
-        <input type="email" placeholder="email@example.com" class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent">
-    </div>
-    <div class="mb-4">
-        <label class="block text-sm font-medium text-gray-700 mb-1">Сообщение</label>
-        <textarea rows="3" placeholder="Ваше сообщение..." class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent"></textarea>
-    </div>
-    <button type="submit" class="w-full bg-orange-500 hover:bg-orange-600 text-white font-bold py-2 rounded-lg transition">Отправить</button>
-</form>''',
-        'секция': '''
-<section class="py-12 px-6 bg-gradient-to-br from-gray-50 to-gray-100 rounded-2xl">
-    <div class="max-w-6xl mx-auto">
-        <h2 class="text-3xl font-extrabold text-center mb-4">Заголовок секции</h2>
-        <p class="text-gray-600 text-center max-w-2xl mx-auto mb-8">Описание секции. Здесь может быть важная информация для пользователей.</p>
-        <div class="grid md:grid-cols-3 gap-6">
-            <div class="bg-white p-6 rounded-xl shadow-md hover:shadow-xl transition">
-                <div class="text-4xl mb-3">📊</div>
-                <h3 class="font-bold text-lg">Пункт 1</h3>
-                <p class="text-gray-600 text-sm">Описание пункта 1</p>
+
+    <!-- 2. МОДАЛЬНОЕ ОКНО -->
+    <div id="modal-overlay" class="modal-overlay">
+        <div class="modal-box">
+            <div class="modal-header">
+                <h2 id="modal-title">Информация о блоке</h2>
+                <button id="modal-close" class="modal-close">&times;</button>
             </div>
-            <div class="bg-white p-6 rounded-xl shadow-md hover:shadow-xl transition">
-                <div class="text-4xl mb-3">🚀</div>
-                <h3 class="font-bold text-lg">Пункт 2</h3>
-                <p class="text-gray-600 text-sm">Описание пункта 2</p>
+            <div class="modal-body">
+                <pre id="modal-code"></pre>
             </div>
-            <div class="bg-white p-6 rounded-xl shadow-md hover:shadow-xl transition">
-                <div class="text-4xl mb-3">🎯</div>
-                <h3 class="font-bold text-lg">Пункт 3</h3>
-                <p class="text-gray-600 text-sm">Описание пункта 3</p>
+            <div class="modal-footer">
+                <button id="btn-improve" class="modal-btn improve">🤖 Улучшить через ИИ</button>
+                <button id="btn-chatgpt" class="modal-btn chatgpt">📤 Отправить в ChatGPT</button>
+                <button id="btn-copy" class="modal-btn copy">📋 Копировать</button>
+                <button id="modal-close-btn2" class="modal-btn cancel">Закрыть</button>
             </div>
         </div>
     </div>
-</section>''',
-        'навигация': '''
-<nav class="bg-white shadow-md rounded-xl px-6 py-4">
-    <div class="flex items-center justify-between max-w-6xl mx-auto">
-        <div class="text-2xl font-extrabold text-orange-500">Логотип</div>
-        <div class="flex gap-8">
-            <a href="#" class="text-gray-700 hover:text-orange-500 font-medium transition">Главная</a>
-            <a href="#" class="text-gray-700 hover:text-orange-500 font-medium transition">Каталог</a>
-            <a href="#" class="text-gray-700 hover:text-orange-500 font-medium transition">О нас</a>
-            <a href="#" class="text-gray-700 hover:text-orange-500 font-medium transition">Контакты</a>
-        </div>
-        <button class="bg-orange-500 hover:bg-orange-600 text-white px-6 py-2 rounded-lg font-semibold transition">Войти</button>
-    </div>
-</nav>'''
-    }
-    for key, template in templates.items():
-        if key in description.lower():
-            return template
-    return templates['карточка']  # по умолчанию
 
-def analyze_blocks(blocks: List[Dict]) -> Dict:
-    """Анализирует блоки и возвращает статистику."""
-    analysis = {
-        'total': len(blocks),
-        'by_category': {},
-        'improved_count': sum(1 for b in blocks if b.get('is_improved')),
-        'total_size': sum(b.get('size', 0) for b in blocks),
-        'total_lines': sum(b.get('lines', 0) for b in blocks),
-    }
-    for b in blocks:
-        cat = b.get('category', 'Другое')
-        analysis['by_category'][cat] = analysis['by_category'].get(cat, 0) + 1
-    return analysis
+    <!-- 3. TOAST УВЕДОМЛЕНИЕ -->
+    <div id="toast" class="toast">Готово!</div>
 
-def apply_style_to_html(html: str, style_config: Dict) -> str:
-    """Внедряет глобальные стили в HTML-документ."""
-    if not html:
-        return html
-    if '<style' not in html:
-        style_tag = f'''
-<style>
-    * {{ transition: all 0.2s ease; }}
-    .primary-color {{ color: {style_config.get('primary_color', '#ff5a1e')}; }}
-    .secondary-color {{ color: {style_config.get('secondary_color', '#8b5cf6')}; }}
-    .rounded-custom {{ border-radius: {style_config.get('border_radius', '12px')}; }}
-</style>
-'''
-        html = html.replace('</head>', style_tag + '</head>')
-    return html
+    <!-- 4. JAVASCRIPT (ОБРАБОТЧИКИ) -->
+    <script>
+        // Получаем данные блоков из Python (передано как JSON)
+        const blocksData = {{ BLOCKS_JSON | safe }};
+        let currentBlockId = null;
 
-# ======================================================================
-# ФУНКЦИИ РАБОТЫ С API (OpenAI, DeepSeek, Claude)
-# ======================================================================
+        const previewContainer = document.getElementById('preview-container');
+        const modalOverlay = document.getElementById('modal-overlay');
+        const modalTitle = document.getElementById('modal-title');
+        const modalCode = document.getElementById('modal-code');
+        const toast = document.getElementById('toast');
 
-def improve_with_openai(content: str, description: str, block_type: str, api_key: str) -> str:
-    """Улучшает блок через OpenAI API."""
-    import openai
-    openai.api_key = api_key
-    prompt = f"""Ты — эксперт по HTML-вёрстке. Улучши этот {description}.
-
-Требования:
-1. Добавь современные CSS-классы (Tailwind-подобные)
-2. Добавь атрибуты доступности (aria-*, role)
-3. Если есть таблица — добавь заголовки
-4. Если есть карточка — добавь hover-эффекты и тени
-5. Добавь микроразметку Schema.org (для товаров)
-6. Сохрани структуру и плейсхолдеры
-
-Выдай ТОЛЬКО HTML-код без пояснений:
-
-{content}"""
-    response = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.7,
-        max_tokens=2000
-    )
-    return response.choices[0].message.content
-
-def improve_with_deepseek(content: str, description: str, block_type: str, api_key: str) -> str:
-    """Улучшает блок через DeepSeek API."""
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
-    prompt = f"""Ты — эксперт по HTML-вёрстке. Улучши этот {description}.
-
-Требования:
-1. Добавь современные CSS-классы
-2. Добавь атрибуты доступности
-3. Улучши структуру
-4. Добавь hover-эффекты и тени
-5. Добавь микроразметку Schema.org
-
-Выдай ТОЛЬКО HTML-код без пояснений:
-
-{content}"""
-    data = {
-        "model": "deepseek-chat",
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.7,
-        "max_tokens": 2000
-    }
-    response = requests.post(
-        "https://api.deepseek.com/v1/chat/completions",
-        headers=headers,
-        json=data,
-        timeout=30
-    )
-    if response.status_code == 200:
-        return response.json()['choices'][0]['message']['content']
-    else:
-        raise Exception(f"DeepSeek API error: {response.status_code}")
-
-def improve_with_claude(content: str, description: str, block_type: str, api_key: str) -> str:
-    """Улучшает блок через Claude API (Anthropic)."""
-    headers = {
-        "x-api-key": api_key,
-        "anthropic-version": "2023-06-01",
-        "Content-Type": "application/json"
-    }
-    prompt = f"""Ты — эксперт по HTML-вёрстке. Улучши этот {description}.
-
-Требования:
-1. Добавь современные CSS-классы
-2. Добавь атрибуты доступности
-3. Улучши структуру
-4. Добавь hover-эффекты и тени
-5. Добавь микроразметку Schema.org
-
-Выдай ТОЛЬКО HTML-код без пояснений:
-
-{content}"""
-    data = {
-        "model": "claude-3-sonnet-20240229",
-        "max_tokens": 2000,
-        "messages": [{"role": "user", "content": prompt}]
-    }
-    response = requests.post(
-        "https://api.anthropic.com/v1/messages",
-        headers=headers,
-        json=data,
-        timeout=30
-    )
-    if response.status_code == 200:
-        return response.json()['content'][0]['text']
-    else:
-        raise Exception(f"Claude API error: {response.status_code}")
-
-def improve_block_with_ai(content: str, description: str, block_type: str,
-                          provider: str, api_key: str) -> str:
-    """Улучшает блок через выбранного провайдера или встроенный ИИ."""
-    if not api_key or provider == 'Встроенный ИИ (без API)':
-        return improve_block_local(content)
-    try:
-        if provider == 'OpenAI':
-            return improve_with_openai(content, description, block_type, api_key)
-        elif provider == 'DeepSeek':
-            return improve_with_deepseek(content, description, block_type, api_key)
-        elif provider == 'Claude':
-            return improve_with_claude(content, description, block_type, api_key)
-        else:
-            return improve_block_local(content)
-    except Exception as e:
-        st.warning(f"Ошибка API: {e}. Использую встроенный ИИ.")
-        return improve_block_local(content)
-
-# ======================================================================
-# ВИЗУАЛЬНЫЙ ГАЙД ДЛЯ НОВИЧКОВ
-# ======================================================================
-def show_guide():
-    st.markdown("""
-    <div class="guide-box">
-        <h3>🎓 Как пользоваться</h3>
-        <div class="guide-step">
-            <div class="num">1</div>
-            <div class="text"><strong>Загрузите HTML</strong> — через боковую панель выберите файл.</div>
-        </div>
-        <div class="guide-step">
-            <div class="num">2</div>
-            <div class="text"><strong>Выберите блок</strong> — кликните на карточку с его названием. Справа появится его визуальное отображение.</div>
-        </div>
-        <div class="guide-step">
-            <div class="num">3</div>
-            <div class="text"><strong>Улучшите</strong> — нажмите "🤖 Улучшить ИИ" для автоматического улучшения блока (встроенным ИИ или через API).</div>
-        </div>
-        <div class="guide-step">
-            <div class="num">4</div>
-            <div class="text"><strong>Обновите и соберите</strong> — после изменений нажмите "Обновить блок", затем "Пересобрать HTML".</div>
-        </div>
-        <div style="background:#dbeafe;padding:10px 16px;border-radius:8px;margin-top:12px;">
-            💡 <strong>Совет:</strong> Каждый блок отображается в виде миниатюры — вы сразу видите, как он выглядит.
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-# ======================================================================
-# ЗАГОЛОВОК ПРИЛОЖЕНИЯ
-# ======================================================================
-st.markdown('<h1 class="main-header">🚀 Визуальный HTML-конструктор PRO</h1>', unsafe_allow_html=True)
-st.markdown('<p class="sub-header">Загрузите HTML, работайте с блоками визуально, улучшайте через ИИ и скачивайте результат</p>', unsafe_allow_html=True)
-
-# ======================================================================
-# БОКОВАЯ ПАНЕЛЬ
-# ======================================================================
-with st.sidebar:
-    st.markdown("### 📂 Управление")
-    uploaded = st.file_uploader("Загрузить HTML", type=['html', 'htm'])
-    if uploaded is not None:
-        content = uploaded.read().decode('utf-8')
-        st.session_state.original_html = content
-        st.session_state.blocks = parse_blocks(content)
-        st.session_state.selected_index = 0 if st.session_state.blocks else -1
-        st.session_state.undo_history = []
-        st.session_state.ai_improved_blocks = set()
-        st.session_state.analysis_data = analyze_blocks(st.session_state.blocks)
-        st.success(f"✅ Загружено! Найдено {len(st.session_state.blocks)} блоков")
-
-    st.divider()
-    st.markdown("### 🔧 Действия")
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("💾 Сохранить", use_container_width=True):
-            if st.session_state.blocks:
-                result = st.session_state.original_html
-                for b in st.session_state.blocks:
-                    try:
-                        result = re.sub(re.escape(b['original']), b['content'], result, flags=re.DOTALL)
-                    except:
-                        pass
-                st.download_button("📥 Скачать HTML", data=result,
-                                   file_name=f"improved_{datetime.now().strftime('%Y%m%d_%H%M')}.html",
-                                   mime="text/html", use_container_width=True)
-    with col2:
-        if st.button("🗑 Очистить", use_container_width=True):
-            st.session_state.blocks = []
-            st.session_state.original_html = ''
-            st.session_state.selected_index = -1
-            st.session_state.undo_history = []
-            st.session_state.ai_improved_blocks = set()
-            st.session_state.analysis_data = {}
-            st.rerun()
-
-    st.divider()
-    st.markdown("### 🔗 API ИИ")
-    st.session_state.api_provider = st.selectbox(
-        "Выберите провайдера",
-        ['Встроенный ИИ (без API)', 'OpenAI', 'DeepSeek', 'Claude'],
-        index=0
-    )
-    if st.session_state.api_provider != 'Встроенный ИИ (без API)':
-        key = st.text_input(f"API-ключ {st.session_state.api_provider}", type="password")
-        if key:
-            st.session_state.api_key = key
-            st.success("✅ API-ключ сохранён")
-        else:
-            st.warning("⚠️ Введите API-ключ для использования внешнего ИИ")
-
-    st.divider()
-    st.markdown("### 📤 Экспорт/Импорт")
-    if st.button("📤 Экспорт JSON", use_container_width=True):
-        if st.session_state.blocks:
-            data = {
-                'version': '2.0',
-                'timestamp': datetime.now().isoformat(),
-                'blocks': st.session_state.blocks,
-                'original_html': st.session_state.original_html,
-                'style_config': st.session_state.style_config
+        // 1. ДЕЛЕГИРОВАНИЕ СОБЫТИЯ КЛИКА НА ВСЕЙ СТРАНИЦЕ
+        previewContainer.addEventListener('click', function(e) {
+            // Находим ближайший родительский элемент с классом .block-wrapper
+            const blockWrapper = e.target.closest('.block-wrapper');
+            if (blockWrapper) {
+                const blockId = parseInt(blockWrapper.getAttribute('data-block-id'));
+                const block = blocksData.find(b => b.id === blockId);
+                if (block) {
+                    openBlockModal(block);
+                }
             }
-            json_str = json.dumps(data, indent=2, ensure_ascii=False)
-            st.download_button(
-                label="📥 Скачать JSON",
-                data=json_str,
-                file_name="project_blocks.json",
-                mime="application/json",
-                use_container_width=True
-            )
-        else:
-            st.warning("Нет данных для экспорта")
-    uploaded_json = st.file_uploader("Импортировать JSON", type=['json'])
-    if uploaded_json is not None:
-        try:
-            data = json.load(uploaded_json)
-            st.session_state.blocks = data.get('blocks', [])
-            st.session_state.original_html = data.get('original_html', '')
-            st.session_state.selected_index = -1
-            st.session_state.undo_history = []
-            if 'style_config' in data:
-                st.session_state.style_config = data['style_config']
-            st.session_state.analysis_data = analyze_blocks(st.session_state.blocks)
-            st.success(f"✅ Импортировано! Блоков: {len(st.session_state.blocks)}")
-        except Exception as e:
-            st.error(f"Ошибка импорта: {e}")
+        });
 
-# ======================================================================
-# ОСНОВНАЯ ОБЛАСТЬ
-# ======================================================================
-if not st.session_state.blocks:
-    # Показываем гайд и генератор
-    show_guide()
+        // 2. ФУНКЦИЯ ОТКРЫТИЯ МОДАЛЬНОГО ОКНА
+        function openBlockModal(block) {
+            currentBlockId = block.id;
+            modalTitle.textContent = `${block.name} (ID: ${block.id})`;
+            modalCode.textContent = block.html;
+            modalOverlay.classList.add('active');
+            document.body.style.overflow = 'hidden'; // Запрещаем скролл страницы сзади
+        }
 
-    st.markdown("### 🎯 Быстрый старт")
-    col_demo1, col_demo2, col_demo3 = st.columns(3)
-    with col_demo1:
-        st.markdown("""
-        <div class="info-box">
-            <strong>📖 Загрузите HTML</strong><br>
-            <small>Любой HTML-файл будет разбит на блоки автоматически</small>
+        // 3. ФУНКЦИЯ ЗАКРЫТИЯ МОДАЛЬНОГО ОКНА
+        function closeBlockModal() {
+            modalOverlay.classList.remove('active');
+            document.body.style.overflow = ''; // Возвращаем скролл
+            currentBlockId = null;
+        }
+
+        // Закрытие по крестику
+        document.getElementById('modal-close').addEventListener('click', closeBlockModal);
+        document.getElementById('modal-close-btn2').addEventListener('click', closeBlockModal);
+        
+        // Закрытие по клику на пустое место (фон)
+        modalOverlay.addEventListener('click', function(e) {
+            if (e.target === modalOverlay) {
+                closeBlockModal();
+            }
+        });
+
+        // Закрытие по нажатию Escape
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape' && modalOverlay.classList.contains('active')) {
+                closeBlockModal();
+            }
+        });
+
+        // 4. КНОПКА "КОПИРОВАТЬ"
+        document.getElementById('btn-copy').addEventListener('click', function() {
+            const code = modalCode.textContent;
+            if (navigator.clipboard) {
+                navigator.clipboard.writeText(code).then(() => {
+                    showToast('✅ Код скопирован в буфер обмена!');
+                }).catch(() => {
+                    fallbackCopyMethod(code);
+                });
+            } else {
+                fallbackCopyMethod(code);
+            }
+        });
+
+        // Запасной метод копирования (для старых браузеров)
+        function fallbackCopyMethod(text) {
+            const textArea = document.createElement('textarea');
+            textArea.value = text;
+            document.body.appendChild(textArea);
+            textArea.select();
+            try {
+                document.execCommand('copy');
+                showToast('✅ Код скопирован в буфер обмена!');
+            } catch (err) {
+                showToast('❌ Ошибка копирования');
+            }
+            document.body.removeChild(textArea);
+        }
+
+        // 5. ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ УВЕДОМЛЕНИЙ (Toast)
+        function showToast(message) {
+            toast.textContent = message;
+            toast.classList.add('show');
+            setTimeout(() => {
+                toast.classList.remove('show');
+            }, 2500);
+        }
+
+        // 6. КНОПКА "УЛУЧШИТЬ ЧЕРЕЗ ИИ" (Запрос на сервер)
+        document.getElementById('btn-improve').addEventListener('click', function() {
+            const block = blocksData.find(b => b.id === currentBlockId);
+            if (!block) return;
+            
+            fetch('/action/improve', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id: block.id, code: block.html })
+            })
+            .then(response => response.json())
+            .then(data => {
+                showToast('🚀 ' + (data.message || 'Запрос на улучшение отправлен!'));
+            })
+            .catch(() => {
+                showToast('❌ Ошибка соединения с модулем улучшения ИИ');
+            });
+        });
+
+        // 7. КНОПКА "ОТПРАВИТЬ В CHATGPT" (Запрос на сервер)
+        document.getElementById('btn-chatgpt').addEventListener('click', function() {
+            const block = blocksData.find(b => b.id === currentBlockId);
+            if (!block) return;
+
+            fetch('/action/chatgpt', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id: block.id, code: block.html })
+            })
+            .then(response => response.json())
+            .then(data => {
+                showToast('📤 ' + (data.message || 'Отправлено в ChatGPT'));
+            })
+            .catch(() => {
+                showToast('❌ Ошибка отправки в ChatGPT');
+            });
+        });
+    </script>
+</body>
+</html>
+"""
+
+# ==========================================
+# 5. ЗАПУСК ВЕБ-СЕРВЕРА (FLASK)
+# ==========================================
+app = Flask(__name__)
+
+@app.route('/')
+def main_page():
+    try:
+        # Читаем ваш монолитный HTML файл
+        with open(INPUT_HTML_FILE, 'r', encoding='utf-8') as file:
+            raw_html = file.read()
+        
+        # Передаем его в функцию парсинга
+        processed_html, blocks_list = extract_and_wrap_blocks(raw_html)
+        
+        # Встраиваем сгенерированный HTML и JSON-данные в шаблон
+        final_page = HTML_TEMPLATE.replace('{{ GENERATED_HTML | safe }}', processed_html)\
+                                  .replace('{{ BLOCKS_JSON | safe }}', json.dumps(blocks_list))
+        return final_page
+        
+    except FileNotFoundError:
+        return f"""
+        <div style="padding:50px; font-family:sans-serif;">
+            <h1>❌ Ошибка: Файл не найден</h1>
+            <p>Скрипт не смог найти файл: <b>{INPUT_HTML_FILE}</b></p>
+            <p>Запустите скрипт с указанием пути к вашему HTML файлу:</p>
+            <pre>python inspector.py путь_к_вашему_файлу.html</pre>
         </div>
-        """, unsafe_allow_html=True)
-    with col_demo2:
-        st.markdown("""
-        <div class="success-box">
-            <strong>🤖 Улучшите через ИИ</strong><br>
-            <small>Встроенный ИИ или API OpenAI/DeepSeek/Claude</small>
-        </div>
-        """, unsafe_allow_html=True)
-    with col_demo3:
-        st.markdown("""
-        <div class="warning-box">
-            <strong>🚀 Скачайте результат</strong><br>
-            <small>Пересоберите HTML со всеми улучшениями за 1 клик</small>
-        </div>
-        """, unsafe_allow_html=True)
+        """
 
-    st.divider()
-    st.markdown("### 📝 Генератор HTML-блоков")
-    st.markdown("Опишите, какой блок нужен, и ИИ создаст его")
-    col_gen1, col_gen2 = st.columns([2, 1])
-    with col_gen1:
-        block_description = st.text_area(
-            "Опишите блок",
-            placeholder="Например: карточка товара с ценой и кнопкой, таблица с артикулами, форма обратной связи...",
-            height=80
-        )
-    with col_gen2:
-        st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("🎨 Сгенерировать блок", use_container_width=True, type="primary"):
-            if block_description:
-                generated = generate_block_from_description(block_description)
-                st.session_state.generated_blocks.append({
-                    'description': block_description,
-                    'html': generated,
-                    'timestamp': datetime.now().isoformat()
-                })
-                st.success("✅ Блок сгенерирован! Выберите его в списке ниже")
-                st.rerun()
-            else:
-                st.warning("Введите описание")
+# Обработчики кнопок (заглушки для интеграции с AI API)
+@app.route('/action/improve', methods=['POST'])
+def api_improve():
+    data = request.json
+    print(f"[СЕРВЕР] Получен запрос на улучшение блока #{data.get('id')}")
+    # ВСТАВЬТЕ СЮДА ВАШУ ЛОГИКУ РАБОТЫ С OpenAI / Gemini / YandexGPT
+    return jsonify({'status': 'ok', 'message': 'ИИ начал обработку (заглушка)'})
 
-    if st.session_state.generated_blocks:
-        st.markdown("#### 📦 Сгенерированные блоки")
-        for i, gen in enumerate(st.session_state.generated_blocks):
-            with st.expander(f"Блок #{i+1}: {gen['description'][:50]}..."):
-                st.code(gen['html'], language='html')
-                if st.button(f"Использовать блок #{i+1}", key=f"use_gen_{i}"):
-                    new_block = {
-                        'id': len(st.session_state.blocks),
-                        'name': f"🎨 Сгенерированный #{i+1}",
-                        'content': gen['html'],
-                        'original': gen['html'],
-                        'desc': gen['description'],
-                        'icon': '🎨',
-                        'category': 'Сгенерированные',
-                        'explanation': 'Создан по вашему описанию',
-                        'size': len(gen['html']),
-                        'lines': gen['html'].count('\n') + 1,
-                        'is_improved': False,
-                        'preview_html': gen['html'][:500] + ('…' if len(gen['html']) > 500 else '')
-                    }
-                    st.session_state.blocks.append(new_block)
-                    st.session_state.analysis_data = analyze_blocks(st.session_state.blocks)
-                    st.success("✅ Блок добавлен!")
-                    st.rerun()
+@app.route('/action/chatgpt', methods=['POST'])
+def api_chatgpt():
+    data = request.json
+    print(f"[СЕРВЕР] Получен запрос на отправку в ChatGPT блока #{data.get('id')}")
+    # ВСТАВЬТЕ СЮДА ВАШУ ЛОГИКУ ОТПРАВКИ В ChatGPT API
+    return jsonify({'status': 'ok', 'message': 'Блок передан в ChatGPT (заглушка)'})
 
-    st.divider()
-    st.markdown("### 🎨 Настройка стилей")
-    st.markdown("Настройте глобальные стили для всех блоков")
-    col_style1, col_style2, col_style3 = st.columns(3)
-    with col_style1:
-        st.session_state.style_config['primary_color'] = st.color_picker(
-            "Основной цвет",
-            value=st.session_state.style_config.get('primary_color', '#ff5a1e')
-        )
-    with col_style2:
-        st.session_state.style_config['secondary_color'] = st.color_picker(
-            "Вторичный цвет",
-            value=st.session_state.style_config.get('secondary_color', '#8b5cf6')
-        )
-    with col_style3:
-        st.session_state.style_config['border_radius'] = st.select_slider(
-            "Скругление",
-            options=['0px', '4px', '8px', '12px', '16px', '24px', '50px'],
-            value=st.session_state.style_config.get('border_radius', '12px')
-        )
-    st.session_state.style_config['font_family'] = st.selectbox(
-        "Шрифт",
-        ['Inter, system-ui, sans-serif', 'Roboto, sans-serif', 'Arial, sans-serif',
-         'JetBrains Mono, monospace', 'Georgia, serif'],
-        index=0
-    )
-    st.session_state.style_config['shadow_intensity'] = st.slider(
-        "Интенсивность тени",
-        min_value=0.0,
-        max_value=0.3,
-        value=float(st.session_state.style_config.get('shadow_intensity', '0.08')),
-        step=0.01
-    )
-
-else:
-    # ===== ПОКАЗЫВАЕМ ГАЙД (если не скрыт) =====
-    if st.session_state.show_guide:
-        show_guide()
-        if st.button("Скрыть гайд", use_container_width=True):
-            st.session_state.show_guide = False
-            st.rerun()
-
-    # ===== ДАШБОРД МЕТРИК =====
-    analysis = st.session_state.analysis_data
-    if analysis:
-        cols = st.columns(4)
-        with cols[0]:
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-icon">📦</div>
-                <div class="metric-value">{analysis.get('total', 0)}</div>
-                <div class="metric-label">Всего блоков</div>
-            </div>
-            """, unsafe_allow_html=True)
-        with cols[1]:
-            improved = analysis.get('improved_count', 0)
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-icon">✨</div>
-                <div class="metric-value">{improved}</div>
-                <div class="metric-label">Улучшено</div>
-            </div>
-            """, unsafe_allow_html=True)
-        with cols[2]:
-            size_kb = round(analysis.get('total_size', 0) / 1024, 1)
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-icon">📄</div>
-                <div class="metric-value">{size_kb} KB</div>
-                <div class="metric-label">Общий размер</div>
-            </div>
-            """, unsafe_allow_html=True)
-        with cols[3]:
-            lines = analysis.get('total_lines', 0)
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-icon">📏</div>
-                <div class="metric-value">{lines}</div>
-                <div class="metric-label">Строк кода</div>
-            </div>
-            """, unsafe_allow_html=True)
-
-        # Детальная аналитика
-        with st.expander("📊 Детальная аналитика", expanded=False):
-            if analysis.get('by_category'):
-                st.markdown("**Распределение по категориям:**")
-                for cat, count in analysis['by_category'].items():
-                    st.progress(count / analysis['total'], text=f"{cat}: {count}")
-
-    st.divider()
-
-    # ===== ТРИ КОЛОНКИ =====
-    col_left, col_mid, col_right = st.columns([1.2, 1.2, 1.6], gap="medium")
-
-    # === ЛЕВАЯ КОЛОНКА: СПИСОК БЛОКОВ С МИНИАТЮРАМИ ===
-    with col_left:
-        st.markdown("### 📦 Блоки")
-        # Фильтры
-        col_filter1, col_filter2 = st.columns(2)
-        with col_filter1:
-            search = st.text_input("🔍 Поиск", placeholder="Название...", key="search_blocks")
-        with col_filter2:
-            categories_list = ['Все'] + sorted(list(set(b.get('category', 'Другое') for b in st.session_state.blocks)))
-            filter_category = st.selectbox("📂 Категория", categories_list, key="filter_category")
-
-        filtered_blocks = st.session_state.blocks
-        if search:
-            filtered_blocks = [b for b in filtered_blocks if search.lower() in b['name'].lower() or search.lower() in b['content'].lower()]
-        if filter_category != 'Все':
-            filtered_blocks = [b for b in filtered_blocks if b.get('category', 'Другое') == filter_category]
-
-        for idx, block in enumerate(filtered_blocks):
-            original_index = st.session_state.blocks.index(block)
-            is_selected = (original_index == st.session_state.selected_index)
-            card_class = "block-card selected" if is_selected else "block-card"
-            improved_badge = '<span class="badge-improved">✨ Улучшен</span>' if block.get('is_improved') else ''
-            size_badge = f'<span class="badge-size">{block.get("size", 0)}</span>'
-            category_badge = f'<span class="category-badge">{block.get("category", "Другое")}</span>'
-
-            # Визуальная миниатюра — рендерим HTML в iframe (упрощённо через div)
-            mini_html = block.get('preview_html', '')
-
-            card_html = f"""
-            <div class="{card_class}">
-                <div class="block-header">
-                    <span class="block-name">{block.get('name', 'Блок')}</span>
-                    <span class="block-badges">
-                        {improved_badge}
-                        {size_badge}
-                    </span>
-                </div>
-                <div class="block-desc">{block.get('desc', '')}</div>
-                <div class="block-meta">
-                    {category_badge}
-                    <span>📏 {block.get('lines', 0)} строк</span>
-                </div>
-                <div class="mini-preview">
-                    {mini_html}
-                    <div class="fade"></div>
-                </div>
-                <div class="mini-label">👁️ нажмите "Выбрать" для детального просмотра</div>
-            </div>
-            """
-            st.markdown(card_html, unsafe_allow_html=True)
-
-            # Кнопка выбора блока (видимая)
-            if st.button(f"Выбрать {block.get('name', '')}", key=f"select_btn_{idx}", use_container_width=True):
-                st.session_state.selected_index = original_index
-                st.rerun()
-
-            # Быстрые действия
-            col_act1, col_act2 = st.columns(2)
-            with col_act1:
-                if st.button(f"🤖 Улучшить", key=f"improve_{idx}", use_container_width=True):
-                    with st.spinner("🔄 ИИ улучшает блок..."):
-                        improved = improve_block_with_ai(
-                            block['content'],
-                            block['desc'],
-                            block['name'],
-                            st.session_state.api_provider,
-                            st.session_state.api_key
-                        )
-                        st.session_state.undo_history.append({'idx': original_index, 'content': block['content']})
-                        if len(st.session_state.undo_history) > 20:
-                            st.session_state.undo_history.pop(0)
-                        block['content'] = improved
-                        block['is_improved'] = True
-                        block['preview_html'] = improved[:500] + '…'
-                        st.session_state.ai_improved_blocks.add(original_index)
-                        st.session_state.analysis_data = analyze_blocks(st.session_state.blocks)
-                        st.success("✅ Блок улучшен!")
-                        st.rerun()
-            with col_act2:
-                if st.button(f"📋 Код", key=f"code_{idx}", use_container_width=True):
-                    st.code(block['content'], language='html')
-            st.divider()
-
-    # === СРЕДНЯЯ КОЛОНКА: РЕДАКТОР ===
-    with col_mid:
-        st.markdown("### ✏️ Редактор")
-        if st.session_state.selected_index >= 0 and st.session_state.selected_index < len(st.session_state.blocks):
-            block = st.session_state.blocks[st.session_state.selected_index]
-            st.info(f"📖 {block.get('explanation', 'Описание отсутствует')}")
-            st.caption(f"Категория: {block.get('category', 'Другое')} • Размер: {block.get('size', 0)} символов • Строк: {block.get('lines', 0)}")
-
-            new_content = st.text_area(
-                "Содержимое блока",
-                value=block['content'],
-                height=400,
-                key="editor",
-                help="Редактируйте HTML-код"
-            )
-            col_upd1, col_upd2, col_upd3, col_upd4 = st.columns(4)
-            with col_upd1:
-                if st.button("🔄 Обновить", use_container_width=True):
-                    st.session_state.undo_history.append({'idx': st.session_state.selected_index, 'content': block['content']})
-                    if len(st.session_state.undo_history) > 20:
-                        st.session_state.undo_history.pop(0)
-                    block['content'] = new_content
-                    block['preview_html'] = new_content[:500] + '…'
-                    block['is_improved'] = True
-                    st.session_state.analysis_data = analyze_blocks(st.session_state.blocks)
-                    st.success("✅ Блок обновлён!")
-                    st.rerun()
-            with col_upd2:
-                if st.button("↩️ Отменить", use_container_width=True):
-                    if st.session_state.undo_history:
-                        last = st.session_state.undo_history.pop()
-                        st.session_state.blocks[last['idx']]['content'] = last['content']
-                        st.session_state.blocks[last['idx']]['preview_html'] = last['content'][:500] + '…'
-                        st.session_state.analysis_data = analyze_blocks(st.session_state.blocks)
-                        st.success("↩️ Отменено!")
-                        st.rerun()
-                    else:
-                        st.warning("Нет действий для отмены")
-            with col_upd3:
-                if st.button("📋 Копировать", use_container_width=True):
-                    st.code(block['content'], language='html')
-                    st.success("📋 Скопировано в буфер (используйте Ctrl+C)")
-            with col_upd4:
-                if st.button("🎨 Применить стили", use_container_width=True):
-                    styled = apply_style_to_html(new_content, st.session_state.style_config)
-                    st.session_state.undo_history.append({'idx': st.session_state.selected_index, 'content': block['content']})
-                    block['content'] = styled
-                    block['preview_html'] = styled[:500] + '…'
-                    block['is_improved'] = True
-                    st.session_state.analysis_data = analyze_blocks(st.session_state.blocks)
-                    st.success("✅ Стили применены!")
-                    st.rerun()
-
-            st.divider()
-            st.markdown("### 🤖 Улучшение через ИИ")
-            col_ai1, col_ai2 = st.columns(2)
-            with col_ai1:
-                if st.button("🤖 Улучшить ИИ", use_container_width=True, type="primary"):
-                    with st.spinner("🔄 ИИ улучшает блок..."):
-                        improved = improve_block_with_ai(
-                            block['content'],
-                            block['desc'],
-                            block['name'],
-                            st.session_state.api_provider,
-                            st.session_state.api_key
-                        )
-                        st.session_state.undo_history.append({'idx': st.session_state.selected_index, 'content': block['content']})
-                        if len(st.session_state.undo_history) > 20:
-                            st.session_state.undo_history.pop(0)
-                        block['content'] = improved
-                        block['is_improved'] = True
-                        block['preview_html'] = improved[:500] + '…'
-                        st.session_state.ai_improved_blocks.add(st.session_state.selected_index)
-                        st.session_state.analysis_data = analyze_blocks(st.session_state.blocks)
-                        st.success("✅ Блок улучшен ИИ!")
-                        st.rerun()
-            with col_ai2:
-                if st.button("📤 Отправить в ChatGPT", use_container_width=True):
-                    prompt = f"Улучши этот {block['desc']}. Добавь современные стили, сделай код чище, добавь недостающие атрибуты, улучши доступность. Сохрани структуру. Выдай только HTML-код без пояснений.\n\n{block['content']}"
-                    st.code(block['content'], language='html')
-                    chatgpt_url = f"https://chat.openai.com/?q={prompt}"
-                    st.markdown(f'<a href="{chatgpt_url}" target="_blank" style="background:linear-gradient(135deg,#ff5a1e,#8b5cf6);color:white;padding:12px 24px;border-radius:12px;text-decoration:none;display:inline-block;font-weight:600;margin-top:8px;">🚀 Открыть ChatGPT</a>', unsafe_allow_html=True)
-
-            # Отображение тегов
-            if block.get('tags'):
-                st.markdown("**🏷️ Теги блока:**")
-                tags = block.get('tags', [])[:5]
-                tag_cols = st.columns(len(tags))
-                for i, tag in enumerate(tags):
-                    with tag_cols[i]:
-                        st.markdown(f'<span class="badge-count">&lt;{tag}&gt;</span>', unsafe_allow_html=True)
-        else:
-            st.info("👈 Выберите блок в списке")
-
-    # === ПРАВАЯ КОЛОНКА: ВИЗУАЛЬНОЕ ПРЕВЬЮ ===
-    with col_right:
-        st.markdown("### 🖼️ Визуальное отображение")
-        if st.session_state.selected_index >= 0 and st.session_state.selected_index < len(st.session_state.blocks):
-            block = st.session_state.blocks[st.session_state.selected_index]
-            st.markdown("**Как выглядит блок:**")
-            st.components.v1.html(block['content'], height=350, scrolling=True)
-
-            with st.expander("📄 Исходный код"):
-                st.code(block['content'], language='html')
-
-            st.divider()
-            st.markdown("### 🚀 Сборка HTML")
-            if st.button("🚀 Пересобрать и скачать", use_container_width=True, type="primary"):
-                result = st.session_state.original_html
-                for b in st.session_state.blocks:
-                    try:
-                        result = re.sub(re.escape(b['original']), b['content'], result, flags=re.DOTALL)
-                    except:
-                        pass
-                result = apply_style_to_html(result, st.session_state.style_config)
-                st.download_button(
-                    label="📥 Скачать HTML",
-                    data=result,
-                    file_name=f"final_{datetime.now().strftime('%Y%m%d_%H%M')}.html",
-                    mime="text/html",
-                    use_container_width=True
-                )
-                st.success("✅ HTML готов к скачиванию!")
-
-            st.divider()
-            st.markdown("### 📊 Информация о блоке")
-            st.markdown(f"**Название:** {block.get('name', '')}")
-            st.markdown(f"**Категория:** {block.get('category', 'Другое')}")
-            st.markdown(f"**Размер:** {block.get('size', 0)} символов")
-            st.markdown(f"**Строк:** {block.get('lines', 0)}")
-            st.markdown(f"**Улучшен:** {'✅ Да' if block.get('is_improved') else '❌ Нет'}")
-            if block.get('is_improved'):
-                st.markdown('<span class="badge-improved">✨ Улучшен ИИ</span>', unsafe_allow_html=True)
-        else:
-            st.info("👈 Выберите блок для визуализации")
-
-    # === ПРЕВЬЮ ВСЕЙ СТРАНИЦЫ ===
-    with col_right:
-        if st.session_state.original_html:
-            st.divider()
-            with st.expander("🌐 Показать всю страницу целиком", expanded=False):
-                st.components.v1.html(st.session_state.original_html, height=600, scrolling=True)
-
-# ======================================================================
-# ФУТЕР
-# ======================================================================
-st.divider()
-st.markdown("""
-<div style="text-align:center;color:#6c757d;font-size:0.8rem;padding:1rem 0;">
-    🚀 Визуальный HTML-конструктор PRO • Редактируйте блоки и сразу видите результат<br>
-    <span style="font-size:0.7rem;">Поддерживает: встроенный ИИ, OpenAI, DeepSeek, Claude • Генератор • Аналитика • Миниатюры блоков</span>
-</div>
-""", unsafe_allow_html=True)
+if __name__ == '__main__':
+    print("="*60)
+    print("🚀 ЗАПУСК ИНТЕРАКТИВНОГО ИНСПЕКТОРА HTML")
+    print(f"📁 Загружаемый файл: {os.path.abspath(INPUT_HTML_FILE)}")
+    print("🌐 Откройте в браузере: http://127.0.0.1:5000")
+    print("="*60)
+    print("⚠️  ВАЖНО: В функции extract_and_wrap_blocks замените поиск")
+    print("   'div class=\"block-desc\"' на ваш личный алгоритм разбиения.")
+    print("="*60)
+    app.run(debug=True, port=5000, host='127.0.0.1')
